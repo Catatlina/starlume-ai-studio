@@ -1720,6 +1720,13 @@ def test_final_scene_requires_an_observable_payoff_cost_anchor():
     )
     assert not any(flag["code"] == "scene_payoff_cost_missing" for flag in earlier_scene_present)
 
+    physical_result_present = GenerationEngine._scene_naturalness_flags(
+        "门缝里的光熄灭了，苏长庚把纸条收进袖中。",
+        accepted_text="赵小胖抬脚时，地面微微一震，门缝边掉下一层灰。",
+        payoff_contract={"cost": "封印磨损加速"},
+    )
+    assert not any(flag["code"] == "scene_payoff_cost_missing" for flag in physical_result_present)
+
 
 def test_scene_serial_does_not_retry_dash_density_that_only_occurs_in_dialogue():
     candidate = "\n\n".join([

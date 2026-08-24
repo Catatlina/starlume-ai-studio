@@ -178,6 +178,27 @@ PAYOFF_COST_ANCHOR_TERMS = (
     "封印", "磨损", "裂缝", "裂开", "消耗", "损失", "受伤", "反噬",
     "暴露", "感知", "追查", "寿元", "灵力", "气息", "资源", "人情债",
 )
+# A contract may describe a rule while the prose shows its physical result.
+# Accept only narrow, domain-specific observations; generic atmosphere is not
+# evidence of a cost.
+PAYOFF_COST_OBSERVATION_TERMS = {
+    "封印": ("门缝", "裂缝", "松动", "掉灰", "地面一震", "地面微微一震", "震动"),
+    "磨损": ("裂缝", "剥落", "掉灰", "变薄", "暗淡", "松动", "地面一震", "震动"),
+    "裂缝": ("裂缝", "裂开", "崩下一块", "剥落"),
+    "裂开": ("裂开", "裂缝", "崩下一块", "剥落"),
+    "消耗": ("灵力见底", "气息变弱", "手臂发麻", "额头见汗", "少了一块"),
+    "损失": ("碎了", "缺了一角", "少了一块", "掉落", "空了"),
+    "受伤": ("血", "伤口", "疼", "踉跄", "扶住"),
+    "反噬": ("吐血", "气息逆冲", "经脉", "倒退", "踉跄"),
+    "暴露": ("气息泄出", "被察觉", "脚步停住", "目光落来"),
+    "感知": ("察觉", "感到", "目光落来", "脚步停住"),
+    "追查": ("脚步声", "追来", "门外有人", "目光落来"),
+    "寿元": ("白发", "皱纹", "气息变弱", "身体发冷"),
+    "灵力": ("灵力见底", "气息变弱", "手臂发麻", "额头见汗"),
+    "气息": ("气息泄出", "气息变弱", "灵压"),
+    "资源": ("灵石见底", "少了一块", "空了", "缺了一角"),
+    "人情债": ("记在账上", "欠下", "收下欠条", "等你还"),
+}
 # A scene-level budget is a pacing guide, not a reason to rewrite a complete
 # scene for a few trailing characters. The chapter envelope and future-scene
 # reservation remain hard limits.
@@ -4201,7 +4222,12 @@ class GenerationEngine:
             if term in payoff_cost
         ]
         observed_scene_chain = f"{accepted_text}\n\n{candidate}".strip()
-        if cost_anchors and not any(term in observed_scene_chain for term in cost_anchors):
+        cost_evidence_terms = {
+            observation
+            for anchor in cost_anchors
+            for observation in (anchor, *PAYOFF_COST_OBSERVATION_TERMS.get(anchor, ()))
+        }
+        if cost_anchors and not any(term in observed_scene_chain for term in cost_evidence_terms):
             flags.append({
                 "code": "scene_payoff_cost_missing",
                 "severity": "high",
@@ -4211,6 +4237,7 @@ class GenerationEngine:
                 ),
                 "evidence": {
                     "required_anchors": cost_anchors,
+                    "accepted_observation_terms": sorted(cost_evidence_terms),
                     "cost_contract": payoff_cost,
                 },
             })
