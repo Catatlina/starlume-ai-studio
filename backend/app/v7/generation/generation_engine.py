@@ -4075,9 +4075,26 @@ class GenerationEngine:
                 start=current_scene_number + 1,
             )
         )
+        _current_minimum, current_nominal_maximum = GenerationEngine._scene_length_bounds(
+            current_card,
+            scene_index=current_scene_number,
+        )
+        current_completion_floor = min(
+            current_nominal_maximum,
+            current_target + SCENE_NATURAL_LENGTH_SOFT_OVERFLOW_CHARS,
+        )
+        reserve_cap = max(0, remaining_budget - current_completion_floor)
+        requested_reserve = max(future_minimum, planned_future_share)
+        # If the chapter plan itself is infeasible, retain the future hard
+        # minimum and let the caller fail before a Provider call with an
+        # explicit exhausted-budget error. Otherwise keep enough current-scene
+        # room for the target plus ordinary paragraph variance.
+        if reserve_cap < future_minimum:
+            return future_minimum
         return min(
             future_natural_capacity,
-            max(future_minimum, planned_future_share),
+            requested_reserve,
+            reserve_cap,
         )
 
     @staticmethod
