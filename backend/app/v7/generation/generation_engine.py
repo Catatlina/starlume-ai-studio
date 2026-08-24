@@ -92,7 +92,7 @@ from ..integration.quality import CHAPTER_MIRROR_HARD_GATE, PAYOFF_VARIETY_HARD_
 logger = logging.getLogger(__name__)
 
 CHAPTER_STATE_TYPE = "chapter"
-SCENE_SERIAL_GENERATION_VERSION = "2.37.0"
+SCENE_SERIAL_GENERATION_VERSION = "2.38.0"
 # Keep the canonical writer loop intentionally small.  Candidate fan-out and
 # local prose surgery belong to explicit/manual tooling, not the production
 # chapter path; nested retries made the writer see too many competing rules.
@@ -5285,7 +5285,18 @@ class GenerationEngine:
                             + content_generation_contract(self.quality_profile)
                         )
                     elif style_only_retry:
-                        if "structural_ai_smell" in previous_issue_codes:
+                        if {
+                            "repeated_paragraph_opening",
+                            "scene_explanatory_narration",
+                        }.issubset(previous_issue_codes):
+                            route = (
+                                "上一版同时有机械段首和旁白结论腔；本轮必须从头重排段落，"
+                                "让物件、声音、环境后果、对白或人物正在做的事承担段首，"
+                                "姓名放进句中自然带出，不能让同一姓名连续或占多数段首。"
+                                "同时删除‘不是梦/错觉/眼花/巧合’以及‘这意味着/这说明/他意识到’式判断，"
+                                "不要换同义词保留结论；把异常直接落到门、灯、纸、脚步、伤势或下一步动作。"
+                            )
+                        elif "structural_ai_smell" in previous_issue_codes:
                             route = (
                                 "上一版出现结构性模板信号；本轮只改信息落点和段落组织，不改本场事实。"
                                 "禁止连续以‘他站’、‘他低’或同一两字主语起笔，禁止把每段写成同样长度的完整说明；"
