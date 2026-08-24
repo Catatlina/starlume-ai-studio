@@ -93,7 +93,7 @@ from ..integration.quality import CHAPTER_MIRROR_HARD_GATE, PAYOFF_VARIETY_HARD_
 logger = logging.getLogger(__name__)
 
 CHAPTER_STATE_TYPE = "chapter"
-SCENE_SERIAL_GENERATION_VERSION = "2.44.0"
+SCENE_SERIAL_GENERATION_VERSION = "2.45.0"
 # Keep the canonical writer loop intentionally small.  Candidate fan-out and
 # local prose surgery belong to explicit/manual tooling, not the production
 # chapter path; nested retries made the writer see too many competing rules.
@@ -4128,12 +4128,14 @@ class GenerationEngine:
         accepted_chars: int,
         chapter_max_chars: int,
     ) -> int:
-        """Keep a proportional completion envelope for scenes not yet written.
+        """Keep complete-scene capacity available for scenes not yet written.
 
         Future beat targets guide planning, but they are not a hard quota. The
-        scheduler reserves only each unwritten scene's minimum complete-event
-        space. Any remaining room belongs to the current scene, and a complete
-        candidate is later checked only against the chapter ceiling.
+        scheduler reserves the future scenes' natural completion capacity so an
+        early Provider call cannot consume the chapter and strand the last
+        event in a truncation-sized remainder. If a future scene uses less,
+        the unused chapter room is reallocated on the next call; the chapter
+        ceiling remains the only reader-facing hard limit.
         """
         future_cards = cards[current_scene_number:]
         if not future_cards:
@@ -4187,7 +4189,7 @@ class GenerationEngine:
             current_natural_capacity,
         )
         reserve_cap = max(0, remaining_budget - current_completion_floor)
-        requested_reserve = future_minimum
+        requested_reserve = future_natural_capacity
         # If the chapter plan itself is infeasible, retain the future hard
         # minimum and let the caller fail before a Provider call with an
         # explicit exhausted-budget error. Otherwise all remaining slack is
