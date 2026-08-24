@@ -9,6 +9,7 @@ No mocks, no placeholder text. Failures raise instead of returning fake success.
 from __future__ import annotations
 
 import asyncio
+from difflib import SequenceMatcher
 import json
 import logging
 import os
@@ -92,7 +93,7 @@ from ..integration.quality import CHAPTER_MIRROR_HARD_GATE, PAYOFF_VARIETY_HARD_
 logger = logging.getLogger(__name__)
 
 CHAPTER_STATE_TYPE = "chapter"
-SCENE_SERIAL_GENERATION_VERSION = "2.40.0"
+SCENE_SERIAL_GENERATION_VERSION = "2.41.0"
 # Keep the canonical writer loop intentionally small.  Candidate fan-out and
 # local prose surgery belong to explicit/manual tooling, not the production
 # chapter path; nested retries made the writer see too many competing rules.
@@ -4019,6 +4020,14 @@ class GenerationEngine:
                 "ratio": evidence.get("ratio"),
                 "baseline": "varied_paragraph_leads",
             }
+        if code == "scene_semantic_duplicate":
+            if not isinstance(evidence, dict):
+                return None
+            return {
+                "pair_count": evidence.get("pair_count"),
+                "pairs": evidence.get("pairs") or [],
+                "baseline": "new_event_after_completed_state",
+            }
         if code == "scene_payoff_cost_missing":
             if not isinstance(evidence, dict):
                 return None
@@ -4423,6 +4432,20 @@ class GenerationEngine:
                 "message": "场景与已接受正文存在完整段落重复",
                 "evidence": duplicate_stats,
             })
+        near_duplicate = GenerationEngine._near_duplicate_scene_evidence(
+            candidate,
+            accepted_text=accepted_text,
+        )
+        if near_duplicate:
+            flags.append({
+                "code": "scene_semantic_duplicate",
+                "severity": "high",
+                "message": (
+                    "本场重演了前面已经发生的完整事件或段落，只改了人名/少量措辞；"
+                    "必须从已完成状态继续推进新的阻碍、选择或结果"
+                ),
+                "evidence": near_duplicate,
+            })
         if re.search(r"(?:根据大纲|场景目标|场景卡|接下来写|读者将|本章需要)", candidate):
             flags.append({
                 "code": "scene_meta_leakage",
@@ -4430,6 +4453,87 @@ class GenerationEngine:
                 "message": "场景正文泄露了写作工程说明",
             })
         return flags
+
+    @staticmethod
+    def _near_duplicate_scene_evidence(
+        candidate: str,
+        *,
+        accepted_text: str = "",
+    ) -> dict[str, Any] | None:
+        """Detect provider replays that are not byte-identical.
+
+        A real provider sometimes repeats a completed interaction with a new
+        character name or a few changed verbs. Exact paragraph de-duplication
+        cannot catch that failure, while accepting it makes the next scene
+        start from a false state. Compare only sufficiently long paragraphs,
+        keep the threshold conservative, and return compact evidence without
+        feeding the old prose back into the retry prompt.
+        """
+        def split(text: str) -> list[str]:
+            return [
+                item.strip()
+                for item in re.split(r"\n{2,}|\n", str(text or ""))
+                if item.strip()
+            ]
+
+        def normalise(text: str) -> str:
+            return re.sub(r"\s+", "", text)
+
+        candidate_paragraphs = split(candidate)
+        if not candidate_paragraphs:
+            return None
+        accepted_paragraphs = split(accepted_text)
+        pairs: list[dict[str, Any]] = []
+
+        def compare(left: list[str], right: list[str], *, source: str) -> None:
+            for left_index, left_value in enumerate(left):
+                left_norm = normalise(left_value)
+                if len(left_norm) < 64:
+                    continue
+                for right_index, right_value in enumerate(right):
+                    right_norm = normalise(right_value)
+                    if len(right_norm) < 64:
+                        continue
+                    length_ratio = len(left_norm) / max(1, len(right_norm))
+                    if not 0.72 <= length_ratio <= 1.38:
+                        continue
+                    ratio = SequenceMatcher(
+                        None,
+                        left_norm,
+                        right_norm,
+                        autojunk=False,
+                    ).ratio()
+                    if ratio >= 0.84:
+                        pairs.append({
+                            "source": source,
+                            "candidate_paragraph": left_index,
+                            "previous_paragraph": right_index,
+                            "similarity": round(ratio, 4),
+                            "candidate_chars": len(left_norm),
+                            "previous_chars": len(right_norm),
+                        })
+
+        if accepted_paragraphs:
+            compare(candidate_paragraphs, accepted_paragraphs, source="accepted_scene")
+        # Also catch a provider duplicating a paragraph inside the same scene
+        # with a light paraphrase, while ignoring short dialogue callbacks.
+        compare(candidate_paragraphs, candidate_paragraphs, source="candidate_scene")
+        pairs = [
+            pair
+            for pair in pairs
+            if not (
+                pair["source"] == "candidate_scene"
+                and pair["candidate_paragraph"] >= pair["previous_paragraph"]
+            )
+        ]
+        if not pairs:
+            return None
+        pairs.sort(key=lambda item: (-item["similarity"], -item["candidate_chars"]))
+        return {
+            "pair_count": len(pairs),
+            "pairs": pairs[:3],
+            "baseline": "new_event_after_completed_state",
+        }
 
     async def _generate_structured_plain_scene_candidate(
         self,
@@ -4863,6 +4967,7 @@ class GenerationEngine:
         previous_scene_tail: str,
         current_state: dict[str, Any],
         previous_handoffs: list[dict[str, Any]],
+        future_scene_cards: list[dict[str, Any]] | None = None,
         retry_feedback: str = "",
         max_scene_chars: int | None = None,
         generation_path: str = "event_action_dialogue",
@@ -4879,6 +4984,35 @@ class GenerationEngine:
         feature_block = render_prose_feature_card(feature_card)
         handoff_block = json.dumps(previous_handoffs[-3:], ensure_ascii=False)[:3600]
         progress_block = json.dumps(current_state, ensure_ascii=False)[:3600]
+        completed_facts = [
+            str(item).strip()
+            for item in (current_state.get("known_facts") or [])
+            if str(item).strip()
+        ][:12]
+        completed_state_block = (
+            "【已经发生的事实（禁止重演）】\n"
+            + "\n".join(f"- {item}" for item in completed_facts)
+            if completed_facts
+            else ""
+        )
+        future_cards = [
+            {
+                "scene_index": item.get("scene_index"),
+                "name": item.get("name"),
+                "goal": item.get("goal"),
+                "content": item.get("content"),
+            }
+            for item in (future_scene_cards or [])
+            if isinstance(item, dict)
+        ]
+        future_scene_block = (
+            "【后续场景（本场禁止提前写入）】\n"
+            + json.dumps(future_cards, ensure_ascii=False)
+            + "\n后续场景的事件、人物求助、对抗、结果和章末钩子尚未发生；本场只能写当前 scene_card，"
+            "如当前场景已经把某个后续事件提前触发，必须跳过它，直接推进当前场景自己的新阻碍或结果。"
+            if future_cards
+            else ""
+        )
         opening_plan = scene_plan.get("opening_plan") or context_layers.get("opening_plan") or {}
         opening_mode_block = (
             f"{opening_prompt_block(opening_plan)}\n"
@@ -4997,6 +5131,8 @@ class GenerationEngine:
             "但每个停顿都必须留下现场压力或下一步选择。"
             "旁白不替读者解释刚刚发生的事情，不写‘这意味着/这说明/他意识到/他心里清楚/不是梦或错觉’式结论；"
             "把结论落到物件位置、动作停顿、资源损失、他人反应或新的限制。"
+            "已确认的写入状态和前面场景交接中列出的事实都已经发生，禁止把同一场求助、解释、反应或结果换个名字再演一遍；"
+            "如果本场契约与已发生事实有重叠，只保留尚未完成的阻碍、选择和后果，直接从当前状态继续。"
             "非对白本轮不使用类比，优先写具体颜色、声音、触感、位置和动作；"
             "不要把感觉改写成形容性联想，也不要用重复拿起、放回、转身来填充犹豫。"
             "对话不承担完整说明任务：角色可以避答、打断、说错重点，信息通过说话目的和现场反应逐步露出。"
@@ -5029,7 +5165,9 @@ class GenerationEngine:
             f"【本场契约】\n{json.dumps(scene_card, ensure_ascii=False)}\n\n"
             f"【上一场末尾原文】\n{previous_scene_tail or '本章开端，承接全书上一章结尾。'}\n\n"
             f"【已确认的写入状态】\n{progress_block}\n\n"
+            f"{completed_state_block}\n\n"
             f"【前面场景的状态交接】\n{handoff_block or '无'}\n\n"
+            f"{future_scene_block}\n\n"
             f"{opening_mode_block}"
             f"{opening_instruction}\n"
             f"{front_loaded_progress_instruction}\n"
@@ -5404,6 +5542,7 @@ class GenerationEngine:
                     ),
                     current_state=current_state,
                     previous_handoffs=handoffs,
+                    future_scene_cards=cards[index:],
                     retry_feedback=feedback,
                     max_scene_chars=attempt_max_scene_chars,
                     generation_path=(
@@ -5994,6 +6133,17 @@ class GenerationEngine:
                         feedback += (
                             "\n动作回环修复硬要求：不要重复‘放回/拿起/转身/回头’来表示犹豫；"
                             "保留一次动作，另一处必须改成新的信息、阻碍、选择或可见后果，不能原地重述。"
+                        )
+                    if any(
+                        isinstance(item, dict)
+                        and item.get("code") == "scene_semantic_duplicate"
+                        for item in issues
+                    ):
+                        feedback += (
+                            "\n跨场景重复修复硬要求：上一版重演了前面已经完成的事件；"
+                            "本轮不得复述前场的求助、提问、解释、动作链或结果，也不能只替换人名和少量动词。"
+                            "从已经发生的状态直接写当前 scene_card 尚未完成的阻碍、主动选择和新后果；"
+                            "如果当前场景卡包含已完成事件，只保留它带来的新压力。"
                         )
                     if any(
                         isinstance(item, dict)

@@ -1589,6 +1589,14 @@ def test_scene_serial_moves_opening_pacing_constraints_into_generation_contract(
         previous_scene_tail="",
         current_state={},
         previous_handoffs=[],
+        future_scene_cards=[
+            {
+                "scene_index": 2,
+                "name": "弟子求助",
+                "goal": "解决功法问题",
+                "content": "弟子请教夹脊运气，苏长庚给出指点",
+            }
+        ],
     )
 
     assert "前120字内必须出现" in prompt
@@ -1619,6 +1627,9 @@ def test_scene_serial_moves_opening_pacing_constraints_into_generation_contract(
     assert "参考节拍范围" in prompt
     assert "本次生成期本场可用章节剩余额度上限" in prompt
     assert "这是章节预算的生成期硬边界" in prompt
+    assert "后续场景（本场禁止提前写入）" in prompt
+    assert "弟子求助" in prompt
+    assert "已确认的写入状态和前面场景交接中列出的事实都已经发生" in prompt
 
     closing_prompt = engine._build_scene_generation_prompt(
         chapter_number=1,
@@ -1719,6 +1730,26 @@ def test_scene_serial_catches_repeated_name_opening_in_a_short_scene():
     flags = GenerationEngine._scene_naturalness_flags(candidate)
 
     assert any(flag["code"] == "repeated_paragraph_opening" for flag in flags)
+
+
+def test_scene_serial_rejects_near_duplicate_event_with_changed_name():
+    accepted = "\n\n".join([
+        "圆脸弟子抱着几册书跑上楼，喘着气请教《青元吐纳诀》第三层气息过夹脊总散。"
+        "苏长庚看了眼他手背的淤痕，告诉他气息不能绕过骨节，要压进去再往上提。",
+        "圆脸弟子原地比划两下，忽然明白过来，抱着书连声道谢。",
+    ])
+    candidate = "\n\n".join([
+        "赵小胖抱着两册书跑上台阶，喘着气请教《青元吐纳诀》第三层气息过夹脊总散。"
+        "苏长庚看了眼他手背的淤痕，告诉他气息不能绕过骨节，要压进去再往上提。",
+        "赵小胖原地比划两下，忽然明白过来，抱着书连声道谢。",
+    ])
+
+    flags = GenerationEngine._scene_naturalness_flags(
+        candidate,
+        accepted_text=accepted,
+    )
+
+    assert any(flag["code"] == "scene_semantic_duplicate" for flag in flags)
 
 
 def test_scene_serial_does_not_blame_one_handoff_paragraph_for_chapter_opening_ratio():
