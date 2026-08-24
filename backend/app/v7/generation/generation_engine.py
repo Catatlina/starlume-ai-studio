@@ -174,6 +174,11 @@ SCENE_MIXED_TRUNCATION_OVERLONG_REPAIR_MARGIN = 1.10
 SCENE_PROVIDER_TOKEN_CAP = 6000
 SCENE_TARGET_MAX_RATIO = 1.30
 SCENE_NATURAL_LENGTH_TOLERANCE = 1.13
+# The post-generation safety layers can add a small amount of text while
+# preserving the scene. Keep this buffer inside the generation-only ceiling so
+# the persisted chapter still respects the reader-facing maximum; never slice
+# the finished prose after the fact.
+SCENE_POST_PROCESS_SAFETY_MARGIN_CHARS = 32
 # The chapter ceiling is the only reader-facing hard limit. Future scenes keep
 # their own minimum complete-event space, while unused budget remains available
 # to the current scene; no fixed per-scene or final-scene quota is imposed.
@@ -6423,6 +6428,10 @@ class GenerationEngine:
         # complete final scene merely because it fits an extra variance band.
         generation_hard_max_chars = maximum_chapter_chars
         generation_absolute_max_chars = maximum_chapter_chars
+        generation_sequence_max_chars = max(
+            minimum_chapter_chars,
+            generation_hard_max_chars - SCENE_POST_PROCESS_SAFETY_MARGIN_CHARS,
+        )
         # The canonical path is scene-serial, but this legacy token value is
         # still part of the returned provenance and repair contract.
         generation_max_tokens = max(
@@ -6625,7 +6634,7 @@ class GenerationEngine:
                 context=context,
                 scene_plan=scene_plan,
                 target_word_count=target_word_count,
-                chapter_max_chars=generation_hard_max_chars,
+                chapter_max_chars=generation_sequence_max_chars,
                 chapter_reader_max_chars=maximum_chapter_chars,
             )
             add_usage(step, serial_result.get("usage") or {})
@@ -6981,6 +6990,7 @@ class GenerationEngine:
             "maximum_chars": maximum_chapter_chars,
             "generation_hard_max_chars": generation_hard_max_chars,
             "generation_absolute_max_chars": generation_absolute_max_chars,
+            "generation_sequence_max_chars": generation_sequence_max_chars,
             "warnings": generation_warnings,
             "reader_chapter_budget": reader_budget,
             "failures": generation_failures,

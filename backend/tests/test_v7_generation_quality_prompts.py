@@ -30,6 +30,7 @@ from app.v7.generation.generation_engine import (
     SCENE_NATURAL_LENGTH_TOLERANCE,
     SCENE_NATURAL_LENGTH_TOLERANCE_CHARS,
     SCENE_NATURAL_LENGTH_SOFT_OVERFLOW_CHARS,
+    SCENE_POST_PROCESS_SAFETY_MARGIN_CHARS,
     SCENE_FUTURE_RESERVE_RATIO,
     SCENE_FINAL_COMPLETION_RESERVE_CHARS,
     CHAPTER_FINAL_SCENE_NATURAL_VARIANCE_CHARS,
@@ -2034,6 +2035,15 @@ def test_scene_length_bounds_make_pacing_budget_a_generation_contract():
         {"target_words": 600},
         scene_index=3,
     )
+
+
+def test_generation_keeps_post_process_margin_inside_reader_maximum():
+    assert SCENE_POST_PROCESS_SAFETY_MARGIN_CHARS == 32
+    reader_max = 3000
+    generation_sequence_max = reader_max - SCENE_POST_PROCESS_SAFETY_MARGIN_CHARS
+
+    assert generation_sequence_max == 2968
+    assert generation_sequence_max < reader_max
     assert minimum == 270
     assert maximum == int(600 * SCENE_TARGET_MAX_RATIO)
     assert maximum < 600 * 1.35
