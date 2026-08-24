@@ -708,6 +708,30 @@ def test_generation_naturalness_keeps_mild_metaphor_density_as_a_warning():
     assert report["passed"] is True
 
 
+def test_generation_naturalness_keeps_long_scene_boundary_density_as_warning():
+    comparisons = "".join([
+        "地面像被水擦过。",
+        "墙角像落了一层灰。",
+        "灯影像贴在门上。",
+        "风像从缝里挤进来。",
+        "声音像压低了一格。",
+        "纸边像被火烫过。",
+        "鞋面像刚浸过冷水。",
+        "门板像被重物顶住。",
+        "灰线像被指甲刮过。",
+        "水痕像刚拖过湿伞。",
+        "灯芯像快要断掉。",
+        "石缝像藏着细沙。",
+        "门闩像被人碰过。",
+        "影子像贴在墙根。",
+    ])
+    report = inspect_generation_naturalness(comparisons + "门锁没有再响。" * 110)
+
+    assert report["narrative_chars"] >= 1600
+    assert any(item["code"] == "scene_metaphor_density_warning" for item in report["warnings"])
+    assert not any(item["code"] == "scene_metaphor_density" for item in report["flags"])
+
+
 def test_scene_retry_feedback_does_not_replay_failed_prose_examples():
     evidence = GenerationEngine._safe_scene_retry_evidence({
         "code": "scene_metaphor_density",

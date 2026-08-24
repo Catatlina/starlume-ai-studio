@@ -244,13 +244,13 @@ def inspect_generation_naturalness(text: Any) -> dict[str, Any]:
     # problem as six images in a 600-character opening.  Scale the threshold
     # with scene size while keeping a floor so short scenes do not overfire.
     # A scene gets a soft warning as soon as it exceeds the density baseline,
-    # but it only becomes a generation blocker after three additional images.
+    # but it only becomes a generation blocker after four additional images.
     # Six-to-nine context-bound comparisons in a 900–1100 character scene are
     # not by themselves an AI-writing defect; treating the soft band as a hard
     # retry made the real Provider fail on ordinary scene texture. Dense image
     # chains remain blocked, especially in shorter scenes.
     simile_limit = max(6, int(size / 160))
-    hard_simile_limit = simile_limit + 3
+    hard_simile_limit = max(simile_limit + 4, int(size / 120))
     if size >= 500 and len(similes) > simile_limit:
         warnings.append({
             "code": "scene_metaphor_density_warning",
