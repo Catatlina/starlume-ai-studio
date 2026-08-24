@@ -215,12 +215,26 @@ def inspect_generation_naturalness(text: Any) -> dict[str, Any]:
     for label, pattern in _EXPLANATION_PATTERNS:
         for match in re.finditer(pattern, narrative):
             explanation_hits.append({"kind": label, "evidence": match.group(0)[:60]})
-    if explanation_hits:
+    hard_explanation_hits = [
+        item for item in explanation_hits
+        if item.get("kind") != "denial_conclusion"
+    ]
+    if hard_explanation_hits:
         flags.append({
             "code": "scene_explanatory_narration",
             "severity": "high",
             "message": "旁白替读者下结论或解释人物已经知道的意义；改用具体动作、物件后果或未完成的念头",
-            "evidence": explanation_hits[:4],
+            "evidence": hard_explanation_hits[:4],
+        })
+    if len(hard_explanation_hits) < len(explanation_hits):
+        warnings.append({
+            "code": "scene_denial_phrase_warning",
+            "severity": "low",
+            "message": "出现单句否定式判断；仅作提醒，不单独阻断场景",
+            "evidence": [
+                item for item in explanation_hits
+                if item.get("kind") == "denial_conclusion"
+            ][:4],
         })
 
     similes = [match.group(0)[:60] for match in _SIMILE_RE.finditer(narrative)]

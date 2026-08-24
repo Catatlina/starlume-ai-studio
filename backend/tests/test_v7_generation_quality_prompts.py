@@ -525,6 +525,21 @@ def test_generation_naturalness_blocks_explanation_metaphor_and_action_loops():
     assert "scene_metaphor_density" in long_codes
 
 
+def test_generation_naturalness_does_not_hard_block_a_single_denial_phrase():
+    report = inspect_generation_naturalness(
+        "他盯着门缝，手指停在门闩上。不是错觉，门里的光确实又亮了一次。"
+    )
+
+    assert not any(
+        item["code"] == "scene_explanatory_narration"
+        for item in report["flags"]
+    )
+    assert any(
+        item["code"] == "scene_denial_phrase_warning"
+        for item in report["warnings"]
+    )
+
+
 def test_generation_naturalness_blocks_state_echo_and_subject_motion_loop():
     text = "\n\n".join([
         "顾沉没有力气回答，沙地的温度从身体里抽走，心跳又慢又重。",
