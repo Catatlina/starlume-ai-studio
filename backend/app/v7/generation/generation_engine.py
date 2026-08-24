@@ -53,6 +53,7 @@ from ...services.quality_profiles import (
 )
 from ..quality.deai_metrics import analyze_deai_patterns
 from ..quality.generation_naturalness import (
+    _remove_dialogue,
     inspect_generation_naturalness,
     render_generation_style_protocol,
     select_generation_style_path,

@@ -1631,6 +1631,17 @@ def test_scene_serial_does_not_retry_dash_density_that_only_occurs_in_dialogue()
     assert not any(flag["code"] == "dash_density" for flag in flags)
 
 
+def test_scene_serial_can_filter_narrative_dash_density_without_runtime_name_error():
+    candidate = "\n\n".join([
+        "门外的脚步停了——又向后退去。" * 4,
+        "他把纸条收进袖口，转身去找楼梯。",
+    ])
+
+    flags = GenerationEngine._scene_naturalness_flags(candidate)
+
+    assert isinstance(flags, list)
+
+
 def test_prose_feature_card_uses_sample_statistics_without_verbatim_payload():
     card = build_prose_feature_card([
         {"text": "门锁先响了。雨水沿着窗框往下淌。她没有回答，只把纸条折回去。", "label": "positive"},
