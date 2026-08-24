@@ -118,6 +118,12 @@ SCENE_BUDGET_RETRY_RATIO = 0.82
 SCENE_BUDGET_RETRY_MAX_OVERFLOW_CHARS = 1200
 SCENE_BUDGET_RETRY_MIN_HEADROOM_CHARS = 180
 SCENE_BUDGET_RETRY_COMPLETION_MARGIN = 0.86
+# A complete scene can still overshoot a tight final remainder when the
+# Provider's completion margin is calibrated for ordinary prose.  The budget
+# retry is a distinct, low-variance path: keep the chapter ceiling hard and
+# give the Provider less token headroom so its Chinese character output lands
+# inside the already-computed remaining budget.
+SCENE_BUDGET_RETRY_PROVIDER_MARGIN = 0.72
 # Character budgets and Provider tokens are not one-to-one for Chinese prose.
 # The 0.86 compression ratio is useful for reducing runaway output, but on a
 # tight final scene it turned an 852-character envelope into 732 tokens and
@@ -5322,6 +5328,12 @@ class GenerationEngine:
                             if provider != "openai"
                             else max(SCENE_BUDGET_RETRY_SMALL_SCENE_COMPLETION_MARGIN, 1.10)
                         )
+                    else:
+                        repair_margin = (
+                            SCENE_BUDGET_RETRY_PROVIDER_MARGIN
+                            if provider != "openai"
+                            else max(SCENE_BUDGET_RETRY_PROVIDER_MARGIN, 0.82)
+                        )
                 scene_token_limit = self._scene_generation_max_tokens(
                     card,
                     scene_index=index,
@@ -5511,7 +5523,11 @@ class GenerationEngine:
                     scene_prompt,
                     system_prompt=scene_system_prompt,
                     max_tokens=scene_token_limit,
-                    temperature=(0.38 if style_only_retry else 0.58) if attempt else 0.62,
+                    temperature=(
+                        0.32
+                        if budget_retry
+                        else ((0.38 if style_only_retry else 0.58) if attempt else 0.62)
+                    ),
                     prompt_name="v7.generation.scene" if attempt == 0 else "v7.generation.scene.repair",
                     prompt_version=SCENE_SERIAL_GENERATION_VERSION,
                     expand_on_truncation=False,
