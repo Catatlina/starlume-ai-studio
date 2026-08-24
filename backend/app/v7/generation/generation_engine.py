@@ -5228,12 +5228,13 @@ class GenerationEngine:
                     ).get("opening_plan") or {}
                     opening_gate = inspect_opening(
                         candidate,
-                        # The scheduler is a writing hint, not a second
-                        # lexical classifier gate.  Requiring an exact mode
-                        # here rejected concrete openings that did not match
-                        # the narrow regex, even when the prose contract and
-                        # downstream review could evaluate them normally.
-                        requested_mode=None,
+                        # Apply the same opening contract during scene
+                        # generation that the chapter gate applies at the
+                        # end.  Leaving this as advisory let an ``unknown``
+                        # opening reach the late prefix-repair path, where a
+                        # single paragraph rewrite could not safely recover
+                        # the whole chapter.
+                        requested_mode=opening_plan.get("mode") or None,
                         chapter_number=chapter_number,
                         recent_modes=opening_plan.get("forbidden_recent_modes") or [],
                     )
