@@ -1868,6 +1868,11 @@ def test_truncated_scene_never_enters_overlong_envelope_shrink_mode():
     ) is False
     assert GenerationEngine._should_shrink_retry_envelope(
         previous_issue_codes={"scene_reader_budget_overrun"},
+        attempt=1,
+        compression_mode=False,
+    ) is True
+    assert GenerationEngine._should_shrink_retry_envelope(
+        previous_issue_codes={"scene_chapter_budget_overrun"},
         attempt=2,
         compression_mode=False,
     ) is True

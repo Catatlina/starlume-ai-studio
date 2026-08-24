@@ -3707,7 +3707,12 @@ class GenerationEngine:
                 "scene_reader_budget_overrun",
             })
             and "scene_provider_truncated" not in previous_issue_codes
-            and attempt >= 2
+            # The normal scene contract allows two attempts (initial write
+            # plus one repair).  Shrink the repair envelope on that first
+            # retry; waiting for attempt 2 made this branch unreachable for
+            # ordinary over-budget scenes and sent the Provider the same
+            # effective budget twice.
+            and attempt >= 1
             and not compression_mode
         )
 
