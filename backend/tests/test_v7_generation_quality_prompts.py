@@ -1699,6 +1699,20 @@ def test_scene_serial_does_not_blame_one_handoff_paragraph_for_chapter_opening_r
     assert not any(flag["code"] == "repeated_paragraph_opening" for flag in flags)
 
 
+def test_final_scene_requires_an_observable_payoff_cost_anchor():
+    missing = GenerationEngine._scene_naturalness_flags(
+        "门缝里的光熄灭了，苏长庚把纸条收进袖中。",
+        payoff_contract={"cost": "封印磨损加速"},
+    )
+    assert any(flag["code"] == "scene_payoff_cost_missing" for flag in missing)
+
+    present = GenerationEngine._scene_naturalness_flags(
+        "门缝里的光熄灭了，青砖上多出一道细裂缝。",
+        payoff_contract={"cost": "封印磨损加速"},
+    )
+    assert not any(flag["code"] == "scene_payoff_cost_missing" for flag in present)
+
+
 def test_scene_serial_does_not_retry_dash_density_that_only_occurs_in_dialogue():
     candidate = "\n\n".join([
         "“你——先别动。”他把手按在门锁上。",

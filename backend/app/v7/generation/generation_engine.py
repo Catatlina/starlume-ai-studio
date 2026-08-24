@@ -164,6 +164,13 @@ SCENE_FUTURE_RESERVE_RATIO = 1.00
 # boundary was rejecting otherwise natural scenes by a few dozen characters;
 # chapter-level target reservation remains the hard ceiling.
 SCENE_NATURAL_LENGTH_TOLERANCE_CHARS = 64
+# These are concrete cost/pressure nouns that should be observable when a
+# chapter contract names them. They are not a detector lexicon; they only
+# prevent a final scene from silently omitting the promised consequence.
+PAYOFF_COST_ANCHOR_TERMS = (
+    "封印", "磨损", "裂缝", "裂开", "消耗", "损失", "受伤", "反噬",
+    "暴露", "感知", "追查", "寿元", "灵力", "气息", "资源", "人情债",
+)
 # A scene-level budget is a pacing guide, not a reason to rewrite a complete
 # scene for a few trailing characters. The chapter envelope and future-scene
 # reservation remain hard limits.
@@ -3861,6 +3868,7 @@ class GenerationEngine:
             "scene_state_echo",
             "scene_procedural_motion",
             "scene_subject_opening",
+            "scene_payoff_cost_missing",
             "scene_opening_contract",
         })
 
@@ -3934,6 +3942,13 @@ class GenerationEngine:
                 "paragraph_count": evidence.get("paragraph_count"),
                 "ratio": evidence.get("ratio"),
                 "baseline": "varied_paragraph_leads",
+            }
+        if code == "scene_payoff_cost_missing":
+            if not isinstance(evidence, dict):
+                return None
+            return {
+                "required_anchors": evidence.get("required_anchors") or [],
+                "baseline": "observable_cost_or_pressure",
             }
         if code == "structural_ai_smell":
             if not isinstance(evidence, dict):
@@ -4114,6 +4129,7 @@ class GenerationEngine:
         text: str,
         *,
         accepted_text: str = "",
+        payoff_contract: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         """Return only generation-time defects that justify one scene retry.
 
@@ -4168,6 +4184,24 @@ class GenerationEngine:
                 and str(flag.get("severity") or "").lower() in {"medium", "high"}
             ):
                 flags.append(flag)
+        payoff_cost = str((payoff_contract or {}).get("cost") or "").strip()
+        cost_anchors = [
+            term for term in PAYOFF_COST_ANCHOR_TERMS
+            if term in payoff_cost
+        ]
+        if cost_anchors and not any(term in candidate for term in cost_anchors):
+            flags.append({
+                "code": "scene_payoff_cost_missing",
+                "severity": "high",
+                "message": (
+                    "章末爽点契约写明了具体代价，但正文没有出现可观察的代价锚点；"
+                    "必须把资源、伤势、封印、暴露或压力变化落到现场"
+                ),
+                "evidence": {
+                    "required_anchors": cost_anchors,
+                    "cost_contract": payoff_cost,
+                },
+            })
         # Chapter-scale detection deliberately needs twelve paragraphs to
         # avoid false positives. A serial scene is often shorter, so catch a
         # clearly repetitive named opening before it contaminates the next
@@ -5298,6 +5332,15 @@ class GenerationEngine:
                                 "同时删除‘不是梦/错觉/眼花/巧合’以及‘这意味着/这说明/他意识到’式判断，"
                                 "不要换同义词保留结论；把异常直接落到门、灯、纸、脚步、伤势或下一步动作。"
                             )
+                        elif "scene_payoff_cost_missing" in previous_issue_codes:
+                            route = (
+                                "上一版章末只写了异常，没有把爽点契约里的代价落到现场。"
+                                "本轮必须从头完整重写最后场景，保留本场目标、结果和因果，"
+                                "并让契约代价对应的具体锚点直接出现：封印磨损、裂缝、资源消耗、伤势、"
+                                "气息暴露或追查压力至少有一项被人物或读者观察到。"
+                                "不要用‘代价是/这意味着/后果就是’宣布结论，也不要凭空新增契约外的势力或事件；"
+                                "用门、灰、光、纸、声音、物件变化或人物动作把代价写出来，写完立即收束。"
+                            )
                         elif "structural_ai_smell" in previous_issue_codes:
                             route = (
                                 "上一版出现结构性模板信号；本轮只改信息落点和段落组织，不改本场事实。"
@@ -5458,6 +5501,11 @@ class GenerationEngine:
                     issues.extend(self._scene_naturalness_flags(
                         candidate,
                         accepted_text="\n\n".join(scene_texts),
+                        payoff_contract=(
+                            scene_plan.get("payoff_contract") or {}
+                            if index == len(cards)
+                            else None
+                        ),
                     ))
                 if not truncated and candidate:
                     # Keep the critic as observable evidence only.  It no
@@ -5763,6 +5811,30 @@ class GenerationEngine:
                             "本次完整重写必须为0处。非对白不得出现‘像、好像、仿佛、如同、宛如、犹如’，"
                             "全部改成可观察的颜色、位置、触感、声音、动作或后果；"
                             "生成前逐句检查，不要用同义联想替代类比。"
+                        )
+                    if any(
+                        isinstance(item, dict)
+                        and item.get("code") == "scene_payoff_cost_missing"
+                        for item in issues
+                    ):
+                        payoff_evidence = next(
+                            (
+                                item.get("evidence") or {}
+                                for item in issues
+                                if isinstance(item, dict)
+                                and item.get("code") == "scene_payoff_cost_missing"
+                            ),
+                            {},
+                        )
+                        anchors = "、".join(
+                            str(anchor)
+                            for anchor in payoff_evidence.get("required_anchors") or []
+                        ) or "契约中的具体代价"
+                        feedback += (
+                            f"\n章末代价修复硬要求：契约锚点为 {anchors}；"
+                            "本次最后场景必须让至少一个锚点以具体物件、声音、痕迹、资源变化、伤势、"
+                            "气息或人物反应出现在正文中。不要用旁白解释‘这意味着代价’；"
+                            "必须让读者看到代价发生，完成后立即收束。"
                         )
                     if any(
                         isinstance(item, dict)
