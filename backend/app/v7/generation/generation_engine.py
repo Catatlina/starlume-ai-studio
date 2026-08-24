@@ -3712,6 +3712,20 @@ class GenerationEngine:
         )
 
     @staticmethod
+    def _can_extend_truncation_retry(
+        *,
+        previous_issue_codes: set[str],
+        attempt: int,
+        max_attempts: int,
+    ) -> bool:
+        """Allow one final completion attempt after two truncations only."""
+        return bool(
+            max_attempts == SCENE_SERIAL_MAX_ATTEMPTS
+            and attempt == SCENE_SERIAL_MAX_ATTEMPTS - 1
+            and "scene_provider_truncated" in previous_issue_codes
+        )
+
+    @staticmethod
     def _is_style_only_retry(previous_issue_codes: set[str]) -> bool:
         """Return whether a retry can be regenerated from contracts alone."""
         return bool(previous_issue_codes) and previous_issue_codes.issubset({
@@ -4789,7 +4803,13 @@ class GenerationEngine:
                 card,
                 scene_index=index,
             )
-            for attempt in range(SCENE_SERIAL_MAX_ATTEMPTS):
+            # Keep ordinary quality repairs at the base retry limit. A
+            # Provider truncation is different: the candidate is incomplete,
+            # so the already-defined final truncation margin needs one extra
+            # bounded attempt after the normal repair also truncates.
+            max_scene_attempts = SCENE_SERIAL_MAX_ATTEMPTS
+            attempt = 0
+            while attempt < max_scene_attempts:
                 attempt_warnings: list[dict[str, Any]] = []
                 provider = str(getattr(self.ai_gateway, "provider", "") or "").lower()
                 naturalness_retry = bool(
@@ -5246,7 +5266,15 @@ class GenerationEngine:
                     for item in issues
                     if isinstance(item, dict)
                 }
-                if attempt < SCENE_SERIAL_MAX_ATTEMPTS - 1:
+                can_retry = attempt < max_scene_attempts - 1
+                if self._can_extend_truncation_retry(
+                    previous_issue_codes=previous_issue_codes,
+                    attempt=attempt,
+                    max_attempts=max_scene_attempts,
+                ):
+                    max_scene_attempts += 1
+                    can_retry = True
+                if can_retry:
                     feedback = "；".join(
                         str(item.get("message") or item.get("code"))
                         + (
@@ -5382,6 +5410,7 @@ class GenerationEngine:
                                 "不要从末尾续写，不要原样复制；请完整重写并收束到本场预算内）：\n"
                                 f"{candidate[:6000]}"
                             )
+                    attempt += 1
                     continue
                 raise AIGatewayError(
                     f"scene {index} failed generation contract after bounded retry: "

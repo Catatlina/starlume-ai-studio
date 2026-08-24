@@ -1935,6 +1935,24 @@ def test_scene_truncation_retry_has_a_bounded_escalation():
     assert SCENE_MIXED_TRUNCATION_OVERLONG_REPAIR_MARGIN == 1.10
 
 
+def test_scene_truncation_can_get_one_final_attempt_but_other_repairs_cannot():
+    assert GenerationEngine._can_extend_truncation_retry(
+        previous_issue_codes={"scene_provider_truncated"},
+        attempt=1,
+        max_attempts=2,
+    ) is True
+    assert GenerationEngine._can_extend_truncation_retry(
+        previous_issue_codes={"scene_overlong"},
+        attempt=1,
+        max_attempts=2,
+    ) is False
+    assert GenerationEngine._can_extend_truncation_retry(
+        previous_issue_codes={"scene_provider_truncated"},
+        attempt=2,
+        max_attempts=3,
+    ) is False
+
+
 def test_scene_budget_guard_rejects_candidate_that_consumes_future_scene_minimums():
     accepted_chars = 4300
     candidate_chars = 700
