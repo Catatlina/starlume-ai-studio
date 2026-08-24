@@ -6281,6 +6281,68 @@ class GenerationEngine:
                             )
                     attempt += 1
                     continue
+                structured_fallback_codes = {
+                    "scene_explanatory_narration",
+                    "scene_metaphor_density",
+                    "scene_repeated_action_loop",
+                    "scene_state_echo",
+                    "scene_procedural_motion",
+                    "scene_subject_opening",
+                    "scene_duplicate_paragraph",
+                    "scene_semantic_duplicate",
+                }
+                if (
+                    candidate
+                    and previous_issue_codes
+                    and previous_issue_codes.issubset(structured_fallback_codes)
+                ):
+                    # One generation-time escape hatch for a Provider that
+                    # keeps returning the same prose shape. It is a new
+                    # structured writing call, not a post-write humanizer;
+                    # the candidate still has to pass the exact scene and
+                    # chapter contracts before it can be accepted.
+                    structured_fallback = await self._generate_structured_plain_scene_candidate(
+                        chapter_number=chapter_number,
+                        scene_index=index,
+                        context=context,
+                        scene_card=card,
+                        previous_scene_tail=scene_texts[-1][-1200:] if scene_texts else (
+                            (context.get("context_layers") or {}).get("previous_tail") or ""
+                        ),
+                        current_state=current_state,
+                        previous_handoffs=handoffs,
+                        min_scene_chars=min_scene_chars,
+                        max_scene_chars=remaining_scene_budget,
+                    )
+                    add_call_usage(structured_fallback.get("usage") or {})
+                    fallback_text = str(structured_fallback.get("text") or "").strip()
+                    fallback_chars = chinese_word_count(fallback_text)
+                    fallback_issues = self._scene_naturalness_flags(
+                        fallback_text,
+                        accepted_text="\n\n".join(scene_texts),
+                    ) if fallback_text else [{"code": "structured_plain_empty"}]
+                    if (
+                        structured_fallback.get("accepted")
+                        and fallback_text
+                        and min_scene_chars <= fallback_chars <= remaining_scene_budget
+                        and not fallback_issues
+                    ):
+                        accepted_scene = fallback_text
+                        scene_metrics = structured_fallback.get("naturalness") or {}
+                        scene_warnings = [
+                            {
+                                "code": "structured_plain_generation_fallback",
+                                "severity": "low",
+                                "message": "表达重试未收敛，已切换一次结构化现场生成并通过同一场景门禁",
+                            }
+                        ]
+                        scene_candidate_selection = {
+                            "strategy": "structured_plain_generation_fallback",
+                            "source_issue_codes": sorted(previous_issue_codes),
+                            "candidate_chars": fallback_chars,
+                        }
+                        attempts_used = attempt + 2
+                        break
                 if candidate and self._can_accept_style_warning(previous_issue_codes):
                     accepted_scene = candidate
                     scene_warnings = [
