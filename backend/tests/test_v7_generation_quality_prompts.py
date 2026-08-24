@@ -27,6 +27,7 @@ from app.v7.generation.generation_engine import (
     SCENE_NATURAL_LENGTH_TOLERANCE,
     SCENE_NATURAL_LENGTH_TOLERANCE_CHARS,
     SCENE_NATURAL_LENGTH_SOFT_OVERFLOW_CHARS,
+    SCENE_FUTURE_RESERVE_RATIO,
     CHAPTER_FINAL_SCENE_NATURAL_VARIANCE_CHARS,
     SCENE_PROVIDER_TOKEN_CAP,
     SCENE_TARGET_MAX_RATIO,
@@ -1557,6 +1558,8 @@ def test_scene_serial_moves_opening_pacing_constraints_into_generation_contract(
     assert "自然段首编排（硬结构，生成期执行，不要输出清单）" in prompt
     assert "每连续 8 段中同一个两字姓名最多只能作为 2 段的首词" in prompt
     assert "重大袭击、对抗或爆发结束后" in prompt
+    assert "本章前半推进硬要求" in prompt
+    assert "不得把本场写成独立的教学、闲聊、帮忙或日常缓冲" in prompt
     assert "关键异常、开门、封印松动、袭击、修炼变化或新能力必须先写可见前提/征兆" in prompt
     assert "碑文、幻象、梦境或他人话语里的数字/年代属于原说话者" in prompt
     assert "本场建议约写" in prompt
@@ -1840,7 +1843,6 @@ def test_scene_length_bounds_make_pacing_budget_a_generation_contract():
         {"target_words": 600},
         scene_index=3,
     )
-
     assert minimum == 270
     assert maximum == int(600 * SCENE_TARGET_MAX_RATIO)
     assert maximum < 600 * 1.35
@@ -1851,6 +1853,60 @@ def test_scene_length_bounds_make_pacing_budget_a_generation_contract():
         int(maximum * SCENE_NATURAL_LENGTH_TOLERANCE)
         + SCENE_NATURAL_LENGTH_TOLERANCE_CHARS
     )
+
+
+def test_future_scene_reserve_is_proportional_and_not_a_fixed_scene_budget():
+    cards = [
+        {"target_words": 1000},
+        {"target_words": 1000},
+        {"target_words": 1000},
+    ]
+
+    first_reserve = GenerationEngine._future_scene_completion_reserve_chars(
+        cards,
+        current_scene_number=1,
+        accepted_chars=0,
+        chapter_max_chars=3000,
+    )
+    second_reserve = GenerationEngine._future_scene_completion_reserve_chars(
+        cards,
+        current_scene_number=2,
+        accepted_chars=1000,
+        chapter_max_chars=3000,
+    )
+    final_reserve = GenerationEngine._future_scene_completion_reserve_chars(
+        cards,
+        current_scene_number=3,
+        accepted_chars=2000,
+        chapter_max_chars=3000,
+    )
+
+    assert SCENE_FUTURE_RESERVE_RATIO == 1.0
+    assert first_reserve == 2000
+    assert second_reserve == 1000
+    assert final_reserve == 0
+    assert first_reserve > sum(
+        GenerationEngine._scene_length_bounds(card, scene_index=index)[0]
+        for index, card in enumerate(cards[1:], start=2)
+    )
+
+
+def test_chapter_completion_uses_reader_budget_range_not_nominal_target():
+    assert GenerationEngine._chapter_within_reader_budget(
+        word_count=2578,
+        minimum_chars=1944,
+        maximum_chars=3000,
+    ) is True
+    assert GenerationEngine._chapter_within_reader_budget(
+        word_count=1900,
+        minimum_chars=1944,
+        maximum_chars=3000,
+    ) is False
+    assert GenerationEngine._chapter_within_reader_budget(
+        word_count=3001,
+        minimum_chars=1944,
+        maximum_chars=3000,
+    ) is False
 
 
 def test_scene_token_budget_uses_provider_margin_and_current_chapter_envelope():

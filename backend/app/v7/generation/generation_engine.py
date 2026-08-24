@@ -92,7 +92,7 @@ from ..integration.quality import CHAPTER_MIRROR_HARD_GATE, PAYOFF_VARIETY_HARD_
 logger = logging.getLogger(__name__)
 
 CHAPTER_STATE_TYPE = "chapter"
-SCENE_SERIAL_GENERATION_VERSION = "2.35.0"
+SCENE_SERIAL_GENERATION_VERSION = "2.36.0"
 # Keep the canonical writer loop intentionally small.  Candidate fan-out and
 # local prose surgery belong to explicit/manual tooling, not the production
 # chapter path; nested retries made the writer see too many competing rules.
@@ -153,6 +153,11 @@ SCENE_MIXED_TRUNCATION_OVERLONG_REPAIR_MARGIN = 1.10
 SCENE_PROVIDER_TOKEN_CAP = 6000
 SCENE_TARGET_MAX_RATIO = 1.30
 SCENE_NATURAL_LENGTH_TOLERANCE = 1.13
+# Reserve future scene capacity from the remaining chapter budget in proportion
+# to the current beat plan. This is a scheduler allocation, not a requirement
+# that every scene hit a fixed word count; the chapter ceiling remains the only
+# reader-facing hard limit.
+SCENE_FUTURE_RESERVE_RATIO = 1.00
 # Keep a small rounding/paragraph variance allowance.  A 32-character
 # boundary was rejecting otherwise natural scenes by a few dozen characters;
 # chapter-level target reservation remains the hard ceiling.
@@ -1655,6 +1660,9 @@ chapter_title 是本章最重要的门面，必须让读者一眼就想点进去
             "敌我状态变化或短暂喘息）再进入长段解释/师徒对话；不能从战斗结果直接跳到讲设定。"
             "正常章节的中段不得把放缓、舒缓、缓冲当作独立节奏目标；辅助人物求助、闲聊或知识展示必须直接改变主线的风险、资源、关系、位置或线索，"
             "否则压缩为主线动作中的几句，不得占用一个完整节拍。"
+            "商业网文的前半章必须在前两个 beat 或前45%篇幅内完成一次主线可见升级/小兑现：风险加深、资源付出、关系变化、规则反馈或明确线索至少落地一项；"
+            "不能把核心异常和第一次反馈全部拖到最后一个 beat。辅助人物互动必须围绕本章核心问题现场发生，不能先用完整教学或闲聊占住读者注意力；"
+            "如果辅助人物必须出现，就让其请求、回答或结果直接改变主线风险/资源/线索，并把讲解压缩到动作和对白中。"
             "chapter_type 必须从 normal、aftermath、relationship、suspense 中选择；"
             "输出必须紧凑：每个 beat 的 name/purpose/content/emotion 各不超过 80 字，"
             "causal_ledger 每列不超过 60 字，列表只写本章真正发生的 4-6 个事件；不要重复字段或附加解释。"
@@ -1700,6 +1708,8 @@ chapter_title 是本章最重要的门面，必须让读者一眼就想点进去
                 "不得用‘鬼使神差’、‘下意识’或‘不知为何’代替动机；重大冲突后先写即时后果或喘息，"
                 "再进入解释性对话，不能从结果直接跳到讲设定；"
                 "正常章节中段不得以放缓/缓冲为独立目标，辅助互动必须直接改变主线并在本场落到可见结果；"
+                "商业网文前半章必须在前两个 beat 或前45%篇幅内出现一次主线可见升级/小兑现，不能把核心异常和第一次反馈全部拖到最后；"
+                "辅助人物请求、教学或闲聊必须直接改变主线风险/资源/线索，否则压缩成主线动作中的几句；"
                 "关键异常、开门、封印松动、袭击、修炼变化或新能力必须补充可见前提和因果连接；"
                 "碑文、幻象、梦境或他人话语中的数字/年代属于原说话者，不得改成主角自己的经历；"
                 "chapter_type 必须是 normal、aftermath、relationship、suspense 之一。\n"
@@ -3962,6 +3972,16 @@ class GenerationEngine:
         return False
 
     @staticmethod
+    def _chapter_within_reader_budget(
+        *,
+        word_count: int,
+        minimum_chars: int,
+        maximum_chars: int,
+    ) -> bool:
+        """Treat the reader range, not the nominal target, as completion."""
+        return minimum_chars <= word_count <= maximum_chars
+
+    @staticmethod
     def _rebalance_future_scene_targets(
         cards: list[dict[str, Any]],
         *,
@@ -3999,6 +4019,66 @@ class GenerationEngine:
         for card in cards:
             card["target_share"] = round(card["target_words"] / planned_words, 4)
         return remaining <= 0
+
+    @staticmethod
+    def _future_scene_completion_reserve_chars(
+        cards: list[dict[str, Any]],
+        *,
+        current_scene_number: int,
+        accepted_chars: int,
+        chapter_max_chars: int,
+    ) -> int:
+        """Keep a proportional completion envelope for scenes not yet written.
+
+        The old scheduler reserved only each future scene's 45% minimum. That
+        allowed an early Provider response to consume most of the chapter and
+        left the final scene with too little room for a complete event. The
+        replacement is still flexible: it reserves the future beats' share of
+        the *remaining* chapter budget, bounded by their natural scene
+        capacities. It therefore reallocates space between scenes without
+        imposing a fixed per-scene word count.
+        """
+        future_cards = cards[current_scene_number:]
+        if not future_cards:
+            return 0
+
+        current_card = cards[current_scene_number - 1]
+        current_target = max(1, int(current_card.get("target_words") or 1))
+        future_target = sum(
+            max(1, int(card.get("target_words") or 1))
+            for card in future_cards
+        )
+        remaining_budget = max(0, chapter_max_chars - accepted_chars)
+        planned_future_share = int(
+            remaining_budget
+            * future_target
+            / max(1, current_target + future_target)
+            * SCENE_FUTURE_RESERVE_RATIO
+        )
+        future_minimum = sum(
+            GenerationEngine._scene_length_bounds(
+                card,
+                scene_index=scene_index,
+            )[0]
+            for scene_index, card in enumerate(
+                future_cards,
+                start=current_scene_number + 1,
+            )
+        )
+        future_natural_capacity = sum(
+            GenerationEngine._scene_allowed_max_chars(
+                card,
+                scene_index=scene_index,
+            )
+            for scene_index, card in enumerate(
+                future_cards,
+                start=current_scene_number + 1,
+            )
+        )
+        return min(
+            future_natural_capacity,
+            max(future_minimum, planned_future_share),
+        )
 
     @staticmethod
     def _scene_naturalness_flags(
@@ -4685,6 +4765,13 @@ class GenerationEngine:
             )
             if scene_index == 2:
                 opening_instruction += "前半场必须把上一场落点转成新的选择、代价或风险。"
+        front_loaded_progress_instruction = ""
+        if 1 <= scene_index <= max(2, (scene_count + 1) // 2):
+            front_loaded_progress_instruction = (
+                "【本章前半推进硬要求】本场必须让本章核心问题产生可见升级，或给出一次可见的小兑现/代价/线索反馈；"
+                "不得把本场写成独立的教学、闲聊、帮忙或日常缓冲。若有辅助人物出现，互动必须直接改变主线风险、资源、关系、位置或线索，"
+                "把解释压缩到动作和对白中，并在本场落到具体结果。"
+            )
         retry_block = f"\n【上次场景未通过，必须在本次生成中修复】\n{retry_feedback}\n" if retry_feedback else ""
         paragraph_opening_contract = (
             "【自然段首编排（硬结构，生成期执行，不要输出清单）】"
@@ -4738,6 +4825,7 @@ class GenerationEngine:
             f"【前面场景的状态交接】\n{handoff_block or '无'}\n\n"
             f"{opening_mode_block}"
             f"{opening_instruction}\n"
+            f"{front_loaded_progress_instruction}\n"
             f"{contract_block}\n"
             f"{causal_contract_block}"
             f"{natural_generation_contract}\n"
@@ -4812,8 +4900,9 @@ class GenerationEngine:
         handoffs: list[dict[str, Any]] = []
         usage = {"tokens_input": 0, "tokens_output": 0, "cost": 0.0, "model": None}
         # The chapter budget is the only hard reader-facing limit. Future beat
-        # targets guide allocation, but a scene may naturally take more or
-        # less space; the scheduler reallocates slack after a complete scene.
+        # targets guide a proportional reservation so the final scene retains
+        # completion space, but no scene is required to hit a fixed word
+        # count; the scheduler reallocates slack after a complete scene.
         planning_max_chars = min(
             chapter_max_chars,
             int(chapter_reader_max_chars or chapter_max_chars),
@@ -4831,13 +4920,18 @@ class GenerationEngine:
                 card,
                 scene_index=index,
             )
-            future_minimum_chars = sum(
-                self._scene_length_bounds(future_card, scene_index=future_index)[0]
-                for future_index, future_card in enumerate(cards[index:], start=index + 1)
-            )
             future_target_chars = sum(
                 int(future_card.get("target_words") or 0)
                 for future_card in cards[index:]
+            )
+            # Keep a proportional completion envelope for later beats instead
+            # of only their 45% minimum. This prevents the first scenes from
+            # consuming the chapter while keeping per-scene length flexible.
+            future_minimum_chars = self._future_scene_completion_reserve_chars(
+                cards,
+                current_scene_number=index,
+                accepted_chars=accepted_chars,
+                chapter_max_chars=chapter_max_chars,
             )
             remaining_scene_budget = chapter_max_chars - accepted_chars - future_minimum_chars
             if remaining_scene_budget < minimum_scene_chars:
@@ -4865,9 +4959,11 @@ class GenerationEngine:
                     future_start=index,
                     excess_chars=required_reallocation,
                 ):
-                    future_minimum_chars = sum(
-                        self._scene_length_bounds(future_card, scene_index=future_index)[0]
-                        for future_index, future_card in enumerate(cards[index:], start=index + 1)
+                    future_minimum_chars = self._future_scene_completion_reserve_chars(
+                        cards,
+                        current_scene_number=index,
+                        accepted_chars=accepted_chars,
+                        chapter_max_chars=chapter_max_chars,
                     )
                     remaining_scene_budget = (
                         chapter_max_chars - accepted_chars - future_minimum_chars
@@ -6374,7 +6470,11 @@ class GenerationEngine:
             "text": final_text,
             "word_count": word_count,
             "target_word_count": target_word_count,
-            "meets_target": word_count >= target_word_count,
+            "meets_target": self._chapter_within_reader_budget(
+                word_count=word_count,
+                minimum_chars=minimum_chapter_chars,
+                maximum_chars=maximum_chapter_chars,
+            ),
             "generation_quality": generation_quality,
             "context": {
                 "rendered_chars": context["rendered_chars"],
@@ -6559,7 +6659,11 @@ class GenerationEngine:
             **generation,
             "text": final_text,
             "word_count": word_count,
-            "meets_target": word_count >= int(generation.get("target_word_count") or 0),
+            "meets_target": self._chapter_within_reader_budget(
+                word_count=word_count,
+                minimum_chars=minimum_chars,
+                maximum_chars=maximum_chars,
+            ),
             "generation_quality": generation_quality,
             "pov_metrics": pov_metrics,
             "content_policy": content_policy,
