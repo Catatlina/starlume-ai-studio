@@ -290,65 +290,89 @@ def persist_gate_results(chapter_id: str, text: str, report: Any) -> None:
 
 async def main() -> None:
     args = parse_args()
-    if args.target_chapters < 1:
-        raise ValueError("--target-chapters必须大于0")
-    assert_clean_long_run_target(args.novel_id)
-    start_chapter = resolve_start_chapter(args.novel_id, args.start_chapter)
-    if start_chapter != 1:
-        raise RuntimeError(f"清空历史后的长跑必须从第1章开始，当前起始章={start_chapter}")
-    if start_chapter > args.target_chapters:
-        raise ValueError("起始章节已经超过目标章节，未执行长跑")
-
-    metadata = load_novel_metadata(args.novel_id)
-    platform_profile = load_platform_profile(args.project_id, args.platform)
-    if start_chapter > 1:
-        previous = chapter_status(args.novel_id, start_chapter - 1)
-        if previous in {"needs_rewrite", "failed"}:
-            raise RuntimeError(f"第{start_chapter - 1}章 status={previous}，必须先修复前置章节")
-
-    log("=" * 60)
-    log("v0.9.2真实Provider 20章长跑验收开始")
-    log(f"小说ID={args.novel_id}, 目标章节={args.target_chapters}, 起始章节={start_chapter}")
-    log(f"平台={platform_profile.get('platform')}, policy={platform_profile.get('policy_status')}")
-    log("=" * 60)
-
+    output_file = args.output or f"/tmp/v092_20ch_report_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.json"
     results: list[dict[str, Any]] = []
     success_count = 0
     publish_ready_count = 0
-    expected_count = args.target_chapters - start_chapter + 1
+    expected_count = args.target_chapters
+    fatal_error: str | None = None
 
-    for chapter_number in range(start_chapter, args.target_chapters + 1):
-        result = await generate_one_chapter(
-            args.novel_id, args.project_id, args.user_id, chapter_number
-        )
-        results.append(result)
-        if not result["success"]:
-            break
+    try:
+        if args.target_chapters < 1:
+            raise ValueError("--target-chapters必须大于0")
+        assert_clean_long_run_target(args.novel_id)
+        start_chapter = resolve_start_chapter(args.novel_id, args.start_chapter)
+        if start_chapter != 1:
+            raise RuntimeError(f"清空历史后的长跑必须从第1章开始，当前起始章={start_chapter}")
+        if start_chapter > args.target_chapters:
+            raise ValueError("起始章节已经超过目标章节，未执行长跑")
 
-        text = get_chapter_text(result["chapter_id"])
-        result["text_length"] = len(text)
-        if not text:
-            result["gates"] = {"error": "generated chapter has no persisted body"}
-            break
+        metadata = load_novel_metadata(args.novel_id)
+        platform_profile = load_platform_profile(args.project_id, args.platform)
+        if start_chapter > 1:
+            previous = chapter_status(args.novel_id, start_chapter - 1)
+            if previous in {"needs_rewrite", "failed"}:
+                raise RuntimeError(f"第{start_chapter - 1}章 status={previous}，必须先修复前置章节")
 
-        gates_result, report = run_publishing_gates(
-            result["chapter_id"], text, args.project_id, args.user_id,
-            args.platform, platform_profile, metadata
-        )
-        result["gates"] = gates_result
-        persist_gate_results(result["chapter_id"], text, report)
-        success_count += 1
-        if gates_result["overall_publish_ready"]:
-            publish_ready_count += 1
+        expected_count = args.target_chapters - start_chapter + 1
+        log("=" * 60)
+        log("v0.9.2真实Provider 20章长跑验收开始")
+        log(f"小说ID={args.novel_id}, 目标章节={args.target_chapters}, 起始章节={start_chapter}")
+        log(f"平台={platform_profile.get('platform')}, policy={platform_profile.get('policy_status')}")
+        log("=" * 60)
 
-        passed = [key for key, value in gates_result["gates"].items() if value["passed"]]
-        failed = [key for key, value in gates_result["gates"].items() if not value["passed"]]
-        log(f"第{chapter_number}章正文={len(text)}字，门禁通过={len(passed)}/7，失败={failed}")
-        log(f"publish_ready={gates_result['overall_publish_ready']}")
-        if chapter_number < args.target_chapters:
-            await asyncio.sleep(2)
+        for chapter_number in range(start_chapter, args.target_chapters + 1):
+            result = await generate_one_chapter(
+                args.novel_id, args.project_id, args.user_id, chapter_number
+            )
+            results.append(result)
+            if not result["success"]:
+                result["acceptance_success"] = False
+                break
 
-    output_file = args.output or f"/tmp/v092_20ch_report_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.json"
+            try:
+                text = get_chapter_text(result["chapter_id"])
+                result["text_length"] = len(text)
+                if not text:
+                    raise RuntimeError("generated chapter has no persisted body")
+
+                gates_result, report = run_publishing_gates(
+                    result["chapter_id"], text, args.project_id, args.user_id,
+                    args.platform, platform_profile, metadata
+                )
+                result["gates"] = gates_result
+                persist_gate_results(result["chapter_id"], text, report)
+                result["acceptance_success"] = True
+                success_count += 1
+                if gates_result["overall_publish_ready"]:
+                    publish_ready_count += 1
+
+                passed = [key for key, value in gates_result["gates"].items() if value["passed"]]
+                failed = [key for key, value in gates_result["gates"].items() if not value["passed"]]
+                log(f"第{chapter_number}章正文={len(text)}字，门禁通过={len(passed)}/7，失败={failed}")
+                log(f"publish_ready={gates_result['overall_publish_ready']}")
+            except Exception as exc:
+                result["acceptance_success"] = False
+                result["acceptance_error"] = str(exc)
+                log(f"第{chapter_number}章生成已落库，但验收步骤失败: {exc}")
+                traceback.print_exc()
+                break
+
+            if chapter_number < args.target_chapters:
+                await asyncio.sleep(2)
+    except Exception as exc:
+        fatal_error = str(exc)
+        results.append({
+            "chapter_number": None,
+            "chapter_id": "",
+            "status": "failed",
+            "success": False,
+            "acceptance_success": False,
+            "error": fatal_error,
+        })
+        log(f"长跑前置或运行失败，已记录报告: {exc}")
+        traceback.print_exc()
+
     with open(output_file, "w", encoding="utf-8") as handle:
         json.dump(results, handle, ensure_ascii=False, indent=2, default=str)
 
@@ -357,7 +381,7 @@ async def main() -> None:
     log(f"完整报告={output_file}")
     log("=" * 60)
 
-    if success_count != expected_count or publish_ready_count != success_count:
+    if fatal_error or success_count != expected_count or publish_ready_count != success_count:
         raise SystemExit(1)
 
 
