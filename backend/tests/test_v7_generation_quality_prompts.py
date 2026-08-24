@@ -783,6 +783,21 @@ def test_readability_plan_is_deterministic_and_changes_delivery_texture():
     assert "避免把每个人的反应都写成整齐的震惊" in rendered
 
 
+def test_readability_plan_renders_generation_rules_and_front_loads_early_turn():
+    plan = build_readability_plan(
+        1,
+        chapter_type="suspense",
+        plot_brief={"reader_promise": "看主角发现门后异动"},
+        opening_plan={"mode": "object", "label": "物件异常开场"},
+    )
+
+    rendered = render_readability_plan(plan)
+
+    assert "本章推进规则（生成时必须执行）" in rendered
+    assert "前三章前 20% 正文必须完成第一次可见转折" in rendered
+    assert "异常出现后最多保留一个反应段" in rendered
+
+
 def test_opening_gate_blocks_recent_mode_reuse_but_allows_explicit_body_contract():
     repeated = inspect_opening(
         "他抬手按住门把，门内立刻传来第二声敲击。",

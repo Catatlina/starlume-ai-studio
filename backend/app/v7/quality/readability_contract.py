@@ -144,6 +144,11 @@ def build_readability_plan(
         "每个主要节拍都要留下至少一项变化：位置、关系、资源、认知、伤势或规则后果。",
         "爆发前给可回看的线索或动作依据；爆发后立刻写出具体反馈，再留下代价或新压力。",
     ]
+    if seq <= 3:
+        scene_execution.append(
+            "前三章前 20% 正文必须完成第一次可见转折；异常出现后最多保留一个反应段，"
+            "立即让主角作出选择、付出代价或得到反馈，不要回到重复职业流程。"
+        )
     return {
         "schema_version": READABILITY_PLAN_SCHEMA_VERSION,
         "chapter_number": seq,
@@ -185,6 +190,10 @@ def render_readability_plan(plan: dict[str, Any] | None, *, compact: bool = Fals
         f"人物声音：{_text(plan.get('voice_anchor'), 220)}",
         "执行顺序：具体压力/目标 → 人物行动与选择 → 信息通过现场落地 → 可见结果/反馈 → 余波或新压力。",
     ]
+    scene_execution = plan.get("scene_execution") or []
+    if scene_execution:
+        lines.append("本章推进规则（生成时必须执行）：")
+        lines.extend(f"- {_text(item, 260)}" for item in scene_execution[:6])
     if not compact:
         lines.append("本章避免的同构写法：")
         lines.extend(f"- {item}" for item in (plan.get("anti_template") or [])[:5])
