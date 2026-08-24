@@ -4199,7 +4199,8 @@ class GenerationEngine:
             term for term in PAYOFF_COST_ANCHOR_TERMS
             if term in payoff_cost
         ]
-        if cost_anchors and not any(term in candidate for term in cost_anchors):
+        observed_scene_chain = f"{accepted_text}\n\n{candidate}".strip()
+        if cost_anchors and not any(term in observed_scene_chain for term in cost_anchors):
             flags.append({
                 "code": "scene_payoff_cost_missing",
                 "severity": "high",
