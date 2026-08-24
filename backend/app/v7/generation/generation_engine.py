@@ -5319,6 +5319,20 @@ class GenerationEngine:
                             + third_person_generation_contract()
                             + content_generation_contract(self.quality_profile)
                         )
+                    elif {
+                        "repeated_paragraph_opening",
+                        "scene_metaphor_density",
+                    }.issubset(previous_issue_codes):
+                        scene_system_prompt = (
+                            "你是中文网文的生成期联合表达修复编辑。必须依据本场 scene_card、已确认状态和"
+                            "上一场交接点，从头重写完整正文；保留事件、人物、因果和本场结果，不得续写或照抄上一版。"
+                            "本次必须同时解决两类问题：段落起笔从动作、物件、声音、环境后果、对白或他人反应自然轮换，"
+                            "同一姓名不能连续占据段首；非对白中的‘像、好像、仿佛、如同、宛如、犹如’必须为0处，"
+                            "所有感官和情绪改写为直接可观察的变化。不要用同义词替换，也不要删掉目标、阻碍、选择或结果。"
+                            "只输出正文。"
+                            + third_person_generation_contract()
+                            + content_generation_contract(self.quality_profile)
+                        )
                     elif "scene_metaphor_density" in previous_issue_codes:
                         scene_system_prompt = (
                             "你是中文网文的生成期字面现场编辑。必须依据本场 scene_card、已确认状态和"
