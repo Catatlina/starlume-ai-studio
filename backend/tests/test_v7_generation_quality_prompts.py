@@ -1702,7 +1702,7 @@ def test_scene_serial_does_not_blame_one_handoff_paragraph_for_chapter_opening_r
 
 def test_final_scene_requires_an_observable_payoff_cost_anchor():
     missing = GenerationEngine._scene_naturalness_flags(
-        "门缝里的光熄灭了，苏长庚把纸条收进袖中。",
+        "苏长庚把纸条收进袖中，转身离开书架。",
         payoff_contract={"cost": "封印磨损加速"},
     )
     assert any(flag["code"] == "scene_payoff_cost_missing" for flag in missing)
