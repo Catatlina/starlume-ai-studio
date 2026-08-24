@@ -1484,7 +1484,7 @@ def test_deai_forced_local_repair_calls_provider_without_detector_flag():
     assert gateway.calls == 1
 
 
-def test_generation_uses_serial_scene_handoffs_and_skips_full_chapter_rewrite():
+def test_generation_uses_single_pass_chapter_writer_and_skips_post_write_rewrite():
     scene_texts = [
         "沈夜按住门锁，门内的水声忽然停了。他没有推门，先把耳朵贴上去，听见里面有人拖动椅脚。林薇抬手拦住他，指了指门缝下那道刚刚亮起的红线。那道光贴着地面一闪一闪，像在等他们先犯错。楼道里的声控灯灭了，黑暗把两人的影子压在门上。林薇没有说话，只把短棍横在身前，目光停在那道红线上。",
         "红线沿着地砖爬到墙角，像有人在里面重新接通了电。沈夜退半步，取出旧钥匙试探锁孔，钥匙没有转动，门后却传来一声低低的笑。林薇压低声音问他要不要离开，他却盯住了锁眼里的微光。锁芯里有细小的齿轮响了一下，像在回应他的犹豫。楼上传来水管敲击声，门内的笑声随即停住。",
@@ -1535,7 +1535,10 @@ def test_generation_uses_serial_scene_handoffs_and_skips_full_chapter_rewrite():
         async def generate(self, prompt, **_kwargs):
             self.calls.append(prompt)
             self.call_kwargs.append(_kwargs)
-            text = scene_texts[len(self.calls) - 1]
+            text = "\n\n".join(scene_texts) + (
+                "\n\n沈夜没有追过去。门里的水声重新响起，楼梯口那个人却把钥匙收回袖中。"
+                "林薇按住他的手腕，两人同时听见头顶传来第三次敲击。门锁里的红线忽然熄灭。楼道安静下来。"
+            )
             return {
                 "text": text,
                 "tokens_input": 0,
@@ -1589,15 +1592,15 @@ def test_generation_uses_serial_scene_handoffs_and_skips_full_chapter_rewrite():
     engine.deai_pipeline = Deai()
     engine.event_bus = EventBus()
 
-    result = asyncio.run(engine.generate_chapter(1, target_word_count=600))
+    result = asyncio.run(engine.generate_chapter(1, target_word_count=500))
 
-    assert result["text"] == "\n\n".join(scene_texts)
-    assert len(engine.ai_gateway.calls) == 4
-    assert len(engine.ai_gateway.json_calls) == 4
-    assert all("上一场末尾原文" in prompt for prompt in engine.ai_gateway.calls)
-    assert result["generation_quality"]["generation_mode"] == "scene_serial"
-    assert result["scene_serial"]["generation_mode"] == "scene_serial"
-    assert result["generation_quality"]["scene_serial"]["handoff_count"] == 4
+    assert result["text"].startswith("\n\n".join(scene_texts))
+    assert len(engine.ai_gateway.calls) == 1
+    assert len(engine.ai_gateway.json_calls) == 0
+    assert all("节拍安排" in prompt for prompt in engine.ai_gateway.calls)
+    assert result["generation_quality"]["generation_mode"] == "chapter_single_pass"
+    assert result["scene_serial"]["generation_mode"] == "chapter_single_pass"
+    assert result["generation_quality"]["scene_serial"]["handoff_count"] == 0
     assert engine.deai_pipeline.calls == []
     # Scene targets are pacing hints.  The Provider receives completion
     # headroom rather than a token ceiling derived from the old hard scene
@@ -2422,6 +2425,46 @@ def test_budget_retry_uses_the_calibrated_deepseek_completion_margin():
     assert SCENE_BUDGET_RETRY_COMPLETION_HEADROOM_TOKENS == 200
     assert SCENE_BUDGET_RETRY_SMALL_SCENE_MAX_CHARS == 800
     assert SCENE_BUDGET_RETRY_SMALL_SCENE_COMPLETION_MARGIN == 1.05
+
+
+def test_single_pass_writer_retries_the_whole_chapter_as_one_budget_unit():
+    engine = GenerationEngine.__new__(GenerationEngine)
+    engine.quality_profile = select_quality_profile()
+    calls = []
+
+    class Gateway:
+        async def generate(self, prompt, **kwargs):
+            calls.append({"prompt": prompt, **kwargs})
+            text = "字" * (3001 if len(calls) == 1 else 2400)
+            return {
+                "text": text,
+                "provider": "deepseek",
+                "model": "deepseek-chat",
+                "tokens_input": 10,
+                "tokens_output": len(text),
+                "cost": 0.01,
+                "finish_reason": "stop",
+            }
+
+    engine.ai_gateway = Gateway()
+    engine._build_generation_prompt = lambda *_args, **_kwargs: "整章写作提示"
+
+    result = asyncio.run(engine._generate_single_pass_chapter(
+        chapter_number=1,
+        context={"context_layers": {}},
+        scene_plan={"beats": []},
+        outline="开篇冲突",
+        target_word_count=3000,
+        chapter_min_chars=1944,
+        chapter_max_chars=2968,
+        chapter_reader_max_chars=3000,
+    ))
+
+    assert result["generation_mode"] == "chapter_single_pass"
+    assert result["word_count"] == 2400
+    assert len(calls) == 2
+    assert result["text"] == "字" * 2400
+    assert result["scene_outputs"][0]["attempts"] == 2
 
 
 def test_expression_only_scene_retry_can_get_one_fresh_style_path():

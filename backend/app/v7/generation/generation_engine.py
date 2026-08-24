@@ -94,6 +94,7 @@ logger = logging.getLogger(__name__)
 
 CHAPTER_STATE_TYPE = "chapter"
 SCENE_SERIAL_GENERATION_VERSION = "2.45.0"
+CHAPTER_SINGLE_PASS_GENERATION_VERSION = "2.46.0"
 # Keep the canonical writer loop intentionally small.  Candidate fan-out and
 # local prose surgery belong to explicit/manual tooling, not the production
 # chapter path; nested retries made the writer see too many competing rules.
@@ -6494,13 +6495,6 @@ class GenerationEngine:
             minimum_chapter_chars,
             generation_hard_max_chars - SCENE_POST_PROCESS_SAFETY_MARGIN_CHARS,
         )
-        # The canonical path is scene-serial, but this legacy token value is
-        # still part of the returned provenance and repair contract.
-        generation_max_tokens = max(
-            900,
-            min(3200, int(maximum_chapter_chars * 0.58)),
-        )
-
         def add_usage(step_ctx: Any, u: dict[str, Any]) -> None:
             usage["tokens_input"] += u.get("tokens_input", 0)
             usage["tokens_output"] += u.get("tokens_output", 0)
@@ -6685,17 +6679,22 @@ class GenerationEngine:
         scene_plan["payoff_beat_validation"] = payoff_beat_validation
         scene_plan["payoff_beat_repair"] = payoff_beat_repair
 
-        # Step: serial scene generation (the primary quality control)
+        # Step: complete-chapter generation.  The planner still supplies all
+        # beats and continuity constraints, but prose is written in one
+        # chapter-sized transaction so an early scene cannot strand the final
+        # scene in an impossible remainder.
         async with self.tracer.trace_step(
             "generation.ai_generate",
             "ai_generation",
-            input_summary=f"Generate {len(scene_plan.get('beats') or [])} linked scenes near {target_word_count} chars with AI",
+            input_summary=f"Generate one complete chapter near {target_word_count} chars with AI",
         ) as step:
-            serial_result = await self._generate_scene_sequence(
+            serial_result = await self._generate_single_pass_chapter(
                 chapter_number=chapter_number,
                 context=context,
                 scene_plan=scene_plan,
+                outline=outline or prompt,
                 target_word_count=target_word_count,
+                chapter_min_chars=minimum_chapter_chars,
                 chapter_max_chars=generation_sequence_max_chars,
                 chapter_reader_max_chars=maximum_chapter_chars,
             )
@@ -6704,6 +6703,13 @@ class GenerationEngine:
             scene_handoffs = serial_result.get("scene_handoffs") or []
             scene_outputs = serial_result.get("scene_outputs") or []
             scene_state = serial_result.get("scene_state") or {}
+            generation_mode = str(
+                serial_result.get("generation_mode") or "chapter_single_pass"
+            )
+            generation_version = str(
+                serial_result.get("generation_version")
+                or CHAPTER_SINGLE_PASS_GENERATION_VERSION
+            )
             raw_pov_metrics = analyze_third_person_narrative(text)
             raw_content_policy = analyze_content_policy(text, self.quality_profile)
             opening_gate = inspect_opening(
@@ -6837,8 +6843,8 @@ class GenerationEngine:
                     "usage": {},
                 }
             else:
-                # Scene serial generation is the primary naturalness control.
-                # Keep the post-write pipeline as an explicit fallback only:
+                # Complete-chapter generation is the primary naturalness
+                # control. Keep the post-write pipeline as an explicit fallback only:
                 # it must not rewrite every accepted chapter and erase the
                 # voice that was established scene by scene.  The metrics stay
                 # observable for the audit layer, but they are not a detector
@@ -7045,8 +7051,8 @@ class GenerationEngine:
             })
         generation_quality = {
             "schema_version": "generation-quality-v1",
-            "generation_mode": "scene_serial",
-            "generation_version": SCENE_SERIAL_GENERATION_VERSION,
+            "generation_mode": generation_mode,
+            "generation_version": generation_version,
             "passed": not generation_failures,
             "minimum_chars": minimum_chapter_chars,
             "maximum_chars": maximum_chapter_chars,
@@ -7113,7 +7119,7 @@ class GenerationEngine:
                 "tokens": usage["tokens_input"] + usage["tokens_output"],
                 "cost": usage["cost"],
                 "deai_changes": deai_result["total_changes"],
-                "generation_mode": "scene_serial",
+                "generation_mode": generation_mode,
                 "scene_count": len(scene_outputs),
             },
         )
@@ -7157,8 +7163,8 @@ class GenerationEngine:
             },
             "scene_plan": scene_plan,
             "scene_serial": {
-                "generation_mode": "scene_serial",
-                "generation_version": SCENE_SERIAL_GENERATION_VERSION,
+                "generation_mode": generation_mode,
+                "generation_version": generation_version,
                 "scene_outputs": scene_outputs,
                 "scene_handoffs": scene_handoffs,
                 "final_state": scene_state,
@@ -7492,6 +7498,157 @@ class GenerationEngine:
             "章末必须把钩子落实为动作、发现或新的选择，不得用总结/说教代替；"
             "情绪要有起伏，避免每段都用同一种‘提出问题-解释-总结’结构；"
             "不要为了‘去AI味’禁用任何单个词或标点，判断标准是整章分布、语境和阅读体验。"
+        )
+
+    async def _generate_single_pass_chapter(
+        self,
+        *,
+        chapter_number: int,
+        context: dict[str, Any],
+        scene_plan: dict[str, Any],
+        outline: str | None,
+        target_word_count: int,
+        chapter_min_chars: int,
+        chapter_max_chars: int,
+        chapter_reader_max_chars: int,
+    ) -> dict[str, Any]:
+        """Write one complete chapter in one bounded Provider transaction.
+
+        The scene planner remains an input to the writer, but scene-by-scene
+        prose calls are not the production path for a reader-sized chapter.
+        They let an early scene consume the future chapter remainder and then
+        leave the final scene with an impossible completion envelope.  The
+        writer therefore receives the complete beat plan and owns the single
+        chapter budget; only one bounded full-chapter retry is allowed.
+        """
+        minimum_chars = max(1, int(chapter_min_chars))
+        hard_max_chars = max(
+            minimum_chars,
+            min(int(chapter_max_chars), int(chapter_reader_max_chars)),
+        )
+        usage = {
+            "tokens_input": 0,
+            "tokens_output": 0,
+            "cost": 0.0,
+            "model": None,
+        }
+
+        def add_usage(call_usage: dict[str, Any]) -> None:
+            usage["tokens_input"] += int(call_usage.get("tokens_input") or 0)
+            usage["tokens_output"] += int(call_usage.get("tokens_output") or 0)
+            usage["cost"] += float(call_usage.get("cost") or 0.0)
+            usage["model"] = call_usage.get("model") or usage["model"]
+
+        base_prompt = self._build_generation_prompt(
+            chapter_number,
+            context,
+            scene_plan,
+            outline,
+            target_word_count,
+        )
+        writer_system_prompt = (
+            "你是同一本中文网文的稳定正文作者。只输出完整章节正文，不输出标题、提纲、"
+            "分析或工程说明。必须把给定节拍写成连续现场，保证爽点、因果、人物行为和章末落点；"
+            f"正文汉字数必须在 {minimum_chars}-{hard_max_chars} 之间，写完结果立即收束。"
+            "不能通过删掉关键事件、用省略号或解释性总结来满足字数。"
+            + third_person_generation_contract()
+            + content_generation_contract(self.quality_profile)
+        )
+        token_limit = min(
+            SCENE_PROVIDER_TOKEN_CAP,
+            max(3200, int(hard_max_chars * 1.15)),
+        )
+        retry_feedback = ""
+        retry_warnings: list[dict[str, Any]] = []
+
+        for attempt in range(2):
+            prompt = base_prompt + retry_feedback
+            result = await self.ai_gateway.generate(
+                prompt,
+                system_prompt=writer_system_prompt,
+                max_tokens=token_limit,
+                temperature=0.62 if attempt == 0 else 0.52,
+                prompt_name=(
+                    "v7.generation.chapter_single_pass"
+                    if attempt == 0
+                    else "v7.generation.chapter_single_pass.repair"
+                ),
+                prompt_version=CHAPTER_SINGLE_PASS_GENERATION_VERSION,
+                expand_on_truncation=False,
+            )
+            add_usage(result)
+            candidate = str(result.get("text") or "").strip()
+            candidate_chars = chinese_word_count(candidate)
+            truncated = bool(result.get("truncated")) or str(
+                result.get("finish_reason") or ""
+            ).lower() == "length"
+            if not truncated and minimum_chars <= candidate_chars <= hard_max_chars:
+                return {
+                    "text": candidate,
+                    "word_count": candidate_chars,
+                    "scene_outputs": [{
+                        "scene_index": 1,
+                        "name": "完整章节正文",
+                        "target_words": target_word_count,
+                        "word_count": candidate_chars,
+                        "attempts": attempt + 1,
+                        "generation_warnings": retry_warnings,
+                        "generation_path": "chapter_single_pass",
+                    }],
+                    "scene_handoffs": [],
+                    "scene_state": {
+                        "time": (context.get("context_layers") or {}).get("current_time") or "",
+                        "location": (context.get("context_layers") or {}).get("current_location") or "",
+                        "known_facts": list((context.get("context_layers") or {}).get("known_facts") or []),
+                        "open_threads": list(
+                            ((context.get("context_layers") or {}).get("previous_transition_contract") or {}).get(
+                                "open_threads"
+                            )
+                            or []
+                        ),
+                    },
+                    "final_scene_natural_variance": False,
+                    "usage": usage,
+                    "generation_mode": "chapter_single_pass",
+                    "generation_version": CHAPTER_SINGLE_PASS_GENERATION_VERSION,
+                }
+
+            retry_warnings.append({
+                "code": "chapter_single_pass_retry",
+                "severity": "low",
+                "message": (
+                    f"第 {attempt + 1} 次整章正文未满足生成合同，已从头重写；"
+                    f"候选 {candidate_chars} 字，目标范围 {minimum_chars}-{hard_max_chars} 字，"
+                    f"provider_truncated={truncated}"
+                ),
+            })
+            if truncated:
+                token_limit = min(6000, max(token_limit + 500, int(token_limit * 1.20)))
+                retry_feedback = (
+                    "\n\n【整章重写要求】上一版在 Provider 输出上限处截断。"
+                    f"本次必须在 {minimum_chars}-{hard_max_chars} 字内完成全部节拍、爽点反馈和章末落点；"
+                    "从头完整写，不得续写截断尾部，不得省略关键结果。"
+                )
+            elif candidate_chars > hard_max_chars:
+                token_limit = max(3000, int(token_limit * 0.92))
+                retry_feedback = (
+                    "\n\n【整章预算收束要求】上一版完整但超出内部章节上限。"
+                    f"本次从头重写并严格收束在 {minimum_chars}-{hard_max_chars} 字；"
+                    "保留目标、阻碍、主动选择、爽点反馈和章末钩子，删除重复反应、重复环境、"
+                    "百科解释和同一事件的二次总结，完成结果后立即收束。"
+                )
+            else:
+                token_limit = min(6000, max(token_limit + 400, int(token_limit * 1.10)))
+                retry_feedback = (
+                    "\n\n【整章完成要求】上一版过短，不能用提纲或总结补长度。"
+                    f"本次从头完整写到 {minimum_chars}-{hard_max_chars} 字，补足尚未完成的目标、"
+                    "阻碍、选择、现场结果和章末压力，保持连续事件推进。"
+                )
+
+        raise AIGatewayError(
+            "single-pass chapter failed generation contract after bounded retry: "
+            f"candidate={candidate_chars},minimum={minimum_chars},maximum={hard_max_chars},"
+            f"provider_truncated={truncated}"
         )
 
     @staticmethod
