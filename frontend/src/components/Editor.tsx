@@ -6,7 +6,7 @@ import { PacingCurve } from "./PacingCurve";
 import { SceneBoard } from "./SceneBoard";
 import { EditorContextPanel } from "./EditorContextPanel";
 import { EditorRoleStatus } from "./EditorRoleStatus";
-import { ChapterSkeletonPanel } from "./ChapterSkeletonPanel";
+import { ChapterDraftPanel } from "./ChapterSkeletonPanel";
 import { Pagination } from "./ui";
 import { usePagination } from "../hooks/usePagination";
 import "../styles/novel-prose.css";
@@ -194,7 +194,7 @@ export function Editor({ chapter, chapters, selectChapter, editorText, setEditor
           </span>
         </div>
         <div style={{ display: "flex", gap: 6 }}>
-          <span className="editor-author-led-badge"><BookOpenText size={13} />AI辅助创作 · 人工成稿</span>
+          <span className="editor-author-led-badge"><BookOpenText size={13} />AI辅助创作 · 全文候选待人工确认</span>
           <button className="btn-sm btn-ghost" disabled={editorAiLoading || !selection.trim()} onClick={() => runEditorOp("polish")} style={{ gap: 4 }}>
             <Wand2 size={13} />选区润色
           </button>
@@ -385,7 +385,7 @@ export function Editor({ chapter, chapters, selectChapter, editorText, setEditor
 
         {/* RIGHT: AI editing conversation */}
         <div className="ed-aside" style={{ display: "flex", flexDirection: "column" }}>
-          <ChapterSkeletonPanel chapterId={chapter.id} />
+          <ChapterDraftPanel chapterId={chapter.id} onUseDraft={setEditorText} />
           <EditorContextPanel chapterId={chapter.id} />
           <EditorRoleStatus projectId={projectId} />
           <div className="editor-rail-heading" style={{ marginBottom: 12 }}>

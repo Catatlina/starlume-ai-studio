@@ -112,6 +112,18 @@ class ChapterSkeletonSaveRequest(BaseModel):
     base_version_id: str | None = None
 
 
+class ChapterDraftRequest(BaseModel):
+    """Author intent for one provider-backed full-text candidate."""
+    author_intent: str = Field(default="", max_length=6000)
+    target_chars: int = Field(default=2600, ge=2200, le=3000)
+    client_mutation_id: str | None = Field(default=None, min_length=8, max_length=120)
+
+
+class ChapterDraftSaveRequest(BaseModel):
+    draft: dict[str, Any]
+    base_version_id: str | None = None
+
+
 class HumanReceiptRequest(BaseModel):
     platform: str = Field(min_length=1, max_length=50)
     publish_record_id: str | None = None
@@ -496,6 +508,36 @@ def _skeleton_char_count(text: str) -> int:
     return len(re.sub(r"\s+", "", str(text or "")))
 
 
+def _draft_char_count(text: str) -> int:
+    """Count visible characters for a full-text candidate."""
+    return _skeleton_char_count(text)
+
+
+def _draft_body_text(body: Any) -> str:
+    if isinstance(body, list):
+        return "\n\n".join(str(item).strip() for item in body if str(item).strip())
+    return str(body or "").strip()
+
+
+def _validate_chapter_draft_protocol(chapter: dict[str, Any]) -> list[str]:
+    """Deterministic gate for a complete prose candidate, not an AI detector."""
+    issues: list[str] = []
+    title = str(chapter.get("title") or "").strip()
+    body = chapter.get("body")
+    if not title:
+        issues.append("chapter.title is empty")
+    if not isinstance(body, list) or len(body) < 6:
+        issues.append("chapter.body must contain at least 6 paragraphs")
+    if isinstance(body, list) and any(not str(item).strip() for item in body):
+        issues.append("chapter.body contains an empty paragraph")
+    text = _draft_body_text(body)
+    if re.search(r"(?m)^\s*(?:【(?:本章目标|主线推进|场景一|下一章钩子|章节骨架)】|(?:本章目标|主线推进|场景一|下一章钩子|正文如下|章节骨架)\s*[:：])", text):
+        issues.append("chapter.body contains planning labels instead of publishable prose")
+    if "```" in text or re.search(r"^\s*[<{]\s*\"(?:chapter|body)\"", text):
+        issues.append("chapter.body contains serialized output markers")
+    return issues
+
+
 SKELETON_AUTHORING_PROTOCOL = "reader-grounded-author-led-v0.1"
 _SCENE_PROTOCOL_FIELDS = ("title", "purpose", "trigger", "action", "choice", "conflict", "cost", "outcome", "visible_change", "characters")
 _READER_EXPERIENCE_FIELDS = ("opening_anchor", "reader_discovery", "interest_change", "aftertaste", "continuation_question")
@@ -635,6 +677,20 @@ def _chapter_skeleton_context(db: Any, chapter: dict[str, Any], novel: dict[str,
 
 
 def _skeleton_snapshot(row: dict[str, Any]) -> dict[str, Any]:
+    snapshot = decode(row.get("snapshot"), {})
+    if not isinstance(snapshot, dict):
+        snapshot = {}
+    return {
+        "id": str(row.get("id")),
+        "version_no": int(row.get("version_no") or 1),
+        "label": row.get("label"),
+        "reason": row.get("reason"),
+        "created_at": row.get("created_at"),
+        **snapshot,
+    }
+
+
+def _draft_snapshot(row: dict[str, Any]) -> dict[str, Any]:
     snapshot = decode(row.get("snapshot"), {})
     if not isinstance(snapshot, dict):
         snapshot = {}
@@ -794,6 +850,172 @@ def save_chapter_skeleton(
         db.commit()
         return ok({"version": _skeleton_snapshot({"id": version_id, "version_no": version_no, "label": "skeleton_human_edit", "reason": "human_edit", "snapshot": snapshot}),
                    "char_count": char_count, "human_confirmed": True}, message="人工修改后的章节骨架已保存，正文仍未修改")
+    finally:
+        db.close()
+
+
+@router.get("/chapters/{chapter_id}/drafts")
+def list_chapter_drafts(chapter_id: str, user: dict = Depends(get_current_user)):
+    """List full-text candidates without reading or replacing contents.body."""
+    db = connect()
+    try:
+        _content(db, chapter_id, user)
+        rows = db.execute(
+            """SELECT id,version_no,label,reason,snapshot,created_at FROM versions
+               WHERE entity_type='chapter_draft' AND entity_id=%s
+               ORDER BY created_at DESC LIMIT 30""",
+            (chapter_id,),
+        ).fetchall()
+        return ok([_draft_snapshot(dict(row)) for row in rows], message="章节正文候选版本")
+    finally:
+        db.close()
+
+
+@router.post("/chapters/{chapter_id}/draft")
+def generate_chapter_draft(
+    chapter_id: str,
+    req: ChapterDraftRequest,
+    user: dict = Depends(get_current_user),
+):
+    """Generate a provider-backed 2200-3000 character prose candidate."""
+    db = connect()
+    try:
+        chapter = _content(db, chapter_id, user, write=True)
+        novel_id = chapter.get("parent_id") if chapter.get("type") == "chapter" else chapter["id"]
+        novel = _novel(db, str(novel_id), user)
+        context = _chapter_skeleton_context(db, chapter, novel)
+    finally:
+        db.close()
+
+    from app.gateway import complete
+
+    mutation_id = req.client_mutation_id or new_id("draft")
+    output = complete(
+        run_id=None,
+        node_key="chapter_draft",
+        project_id=str(novel["project_id"]),
+        user_id=str(user["id"]),
+        task_type="chapter_draft",
+        prompt_name="authoring.chapter_draft",
+        client_mutation_id=mutation_id,
+        variables={
+            **context,
+            "author_intent": req.author_intent or "（作者暂未补充意图，请依据已确认资料写出本章最自然、最有推进力的正文）",
+            "target_chars": req.target_chars,
+        },
+    )
+    chapter_output = output.get("chapter") if isinstance(output.get("chapter"), dict) else {}
+    protocol_issues = _validate_chapter_draft_protocol(chapter_output)
+    if protocol_issues:
+        raise HTTPException(
+            status_code=502,
+            detail=("Provider returned a full-text candidate that failed the prose protocol: "
+                    + "; ".join(protocol_issues[:8])
+                    + ". No draft was changed."),
+        )
+    body_text = _draft_body_text(chapter_output.get("body"))
+    char_count = _draft_char_count(body_text)
+    if not 2200 <= char_count <= 3000:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Provider returned body with {char_count} visible characters; expected 2200-3000. No draft was changed.",
+        )
+
+    db = connect()
+    try:
+        ledger = db.execute(
+            """SELECT id,provider,model,status FROM ai_calls
+               WHERE project_id=%s AND client_mutation_id=%s
+               ORDER BY created_at DESC LIMIT 1""",
+            (novel["project_id"], mutation_id),
+        ).fetchone()
+        version_no = db.execute(
+            """SELECT COALESCE(MAX(version_no),0)+1 AS next_version FROM versions
+               WHERE entity_type='chapter_draft' AND entity_id=%s""",
+            (chapter_id,),
+        ).fetchone()["next_version"]
+        version_id = new_id("ver")
+        snapshot = {
+            "artifact_type": "chapter_draft",
+            "status": "ai_generated",
+            "authoring_protocol": "reader-grounded-author-led-fulltext-v0.1",
+            "target_chars": req.target_chars,
+            "char_count": char_count,
+            "author_intent": req.author_intent,
+            "draft": {key: value for key, value in chapter_output.items()},
+            "provider_verified": bool(ledger and ledger.get("status") == "succeeded"),
+            "provider": ledger.get("provider") if ledger else None,
+            "model": ledger.get("model") if ledger else None,
+            "ai_call_id": str(ledger.get("id")) if ledger and ledger.get("id") else None,
+        }
+        db.execute(
+            """INSERT INTO versions
+               (id,entity_type,entity_id,version_no,label,snapshot,reason,author_id)
+               VALUES (%s,'chapter_draft',%s,%s,'ai_draft',%s,'ai_generated',%s)""",
+            (version_id, chapter_id, version_no, encode(snapshot), user["id"]),
+        )
+        db.commit()
+        return ok({
+            "version": _draft_snapshot({
+                "id": version_id, "version_no": version_no, "label": "ai_draft",
+                "reason": "ai_generated", "snapshot": snapshot,
+            }),
+            "provider_verified": snapshot["provider_verified"],
+            "char_count": char_count,
+        }, message="正文候选已生成，原正文未修改")
+    finally:
+        db.close()
+
+
+@router.post("/chapters/{chapter_id}/drafts/save")
+def save_chapter_draft(
+    chapter_id: str,
+    req: ChapterDraftSaveRequest,
+    user: dict = Depends(get_current_user),
+):
+    """Save an edited full-text candidate as a version; it still does not publish to the chapter."""
+    db = connect()
+    try:
+        _content(db, chapter_id, user, write=True)
+        raw = dict(req.draft or {})
+        nested = raw.get("draft") if isinstance(raw.get("draft"), dict) else raw
+        title = str(nested.get("title") or "本章正文候选").strip()
+        body = nested.get("body")
+        body_text = _draft_body_text(body)
+        char_count = _draft_char_count(body_text)
+        if not body_text or not 2200 <= char_count <= 3000:
+            raise HTTPException(status_code=422, detail=f"正文候选需保持2200-3000个可见字，当前为{char_count}字")
+        version_no = db.execute(
+            """SELECT COALESCE(MAX(version_no),0)+1 AS next_version FROM versions
+               WHERE entity_type='chapter_draft' AND entity_id=%s""",
+            (chapter_id,),
+        ).fetchone()["next_version"]
+        version_id = new_id("ver")
+        snapshot = {
+            "artifact_type": "chapter_draft",
+            "status": "human_edited",
+            "authoring_protocol": "reader-grounded-author-led-fulltext-v0.1",
+            "char_count": char_count,
+            "base_version_id": req.base_version_id,
+            "draft": {"title": title, "body": body if isinstance(body, list) else [body_text]},
+            "provider_verified": False,
+            "human_confirmed": True,
+        }
+        db.execute(
+            """INSERT INTO versions
+               (id,entity_type,entity_id,version_no,label,snapshot,reason,author_id)
+               VALUES (%s,'chapter_draft',%s,%s,'draft_human_edit',%s,'human_edit',%s)""",
+            (version_id, chapter_id, version_no, encode(snapshot), user["id"]),
+        )
+        db.commit()
+        return ok({
+            "version": _draft_snapshot({
+                "id": version_id, "version_no": version_no, "label": "draft_human_edit",
+                "reason": "human_edit", "snapshot": snapshot,
+            }),
+            "char_count": char_count,
+            "human_confirmed": True,
+        }, message="人工修改后的正文候选已保存，原正文仍未修改")
     finally:
         db.close()
 

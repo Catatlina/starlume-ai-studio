@@ -48,6 +48,7 @@ LONG_FORM_TASKS = {
     "gen_chapter1",
     "gen_next_chapter",
     "write_chapter_draft",
+    "chapter_draft",
     "write_polish",
     "final_humanize",
     "editor_continue",
@@ -641,6 +642,7 @@ BOOTSTRAP_OUTPUT_MODELS: dict[str, type[BaseModel]] = {
     "blueprint_scene_beat": _BlueprintSceneBeatOutput,
     "generate_story_arc": _GenerateStoryArcOutput,
     "write_chapter_draft": _WriteChapterDraftOutput,
+    "chapter_draft": _WriteChapterDraftOutput,
     "write_self_review": _WriteSelfReviewOutput,
     "write_polish": _WritePolishOutput,
     "write_length_check": _WriteLengthCheckOutput,
@@ -722,6 +724,31 @@ def _normalize_bootstrap_output(task_type: str, output: dict) -> dict:
     if not isinstance(output, dict):
         return output
     out = dict(output)
+    if task_type == "chapter_draft":
+        chapter = out.get("chapter")
+        if not isinstance(chapter, dict):
+            body_src: Any = None
+            title = str(out.get("title") or "")
+            if isinstance(out.get("body"), (list, str)):
+                body_src = out["body"]
+            elif isinstance(out.get("text"), str):
+                body_src = out["text"]
+            if body_src is not None:
+                chapter = {"title": title, "body": body_src}
+        if isinstance(chapter, dict):
+            body = chapter.get("body")
+            if isinstance(body, str):
+                chapter["body"] = _split_into_paragraphs(body)
+            elif isinstance(body, list):
+                cleaned: list[str] = []
+                for item in body:
+                    if isinstance(item, str):
+                        cleaned.append(item.strip())
+                    elif isinstance(item, dict):
+                        cleaned.append(str(item.get("text", item.get("content", ""))).strip())
+                chapter["body"] = [item for item in cleaned if item]
+            chapter.setdefault("title", out.get("title", "") or "")
+            out["chapter"] = chapter
     if task_type == "write_polish":
         polished = out.get("polished")
         # 1. No polished wrapper -> derive from bare body / chapter / text.

@@ -14,6 +14,9 @@ def test_authoring_routes_are_registered():
     assert "/api/v1/authoring/chapters/{chapter_id}/skeleton" in paths
     assert "/api/v1/authoring/chapters/{chapter_id}/skeletons" in paths
     assert "/api/v1/authoring/chapters/{chapter_id}/skeletons/save" in paths
+    assert "/api/v1/authoring/chapters/{chapter_id}/draft" in paths
+    assert "/api/v1/authoring/chapters/{chapter_id}/drafts" in paths
+    assert "/api/v1/authoring/chapters/{chapter_id}/drafts/save" in paths
     assert "/api/v1/authoring/story-bible/{item_id}/impact" in paths
     assert "/api/v1/authoring/provider-roles" in paths
     assert "/api/v1/authoring/writing-events" in paths
@@ -122,3 +125,31 @@ def test_chapter_skeleton_protocol_rejects_a_flat_scene_summary():
     assert "scene_1.choice is empty" in issues
     assert "reader_experience_plan.continuation_question is empty" in issues
     assert "skeleton_text contains a placeholder" in issues
+
+
+def test_chapter_draft_uses_full_text_budget_and_keeps_prose_separate():
+    from app.api.v1.authoring import ChapterDraftRequest, _draft_char_count, _validate_chapter_draft_protocol
+    from app.gateway import validate_task_output
+
+    paragraphs = ["他没有解释，只把门推开，里面的风迎面撞了出来。" * 16 for _ in range(6)]
+    output = validate_task_output("chapter_draft", {
+        "chapter": {"title": "门后的账本", "body": paragraphs},
+    })
+    text = "\n\n".join(paragraphs)
+    assert 2200 <= _draft_char_count(text) <= 3000
+    assert _validate_chapter_draft_protocol(output["chapter"]) == []
+    assert ChapterDraftRequest().target_chars == 2600
+    with pytest.raises(ValueError):
+        ChapterDraftRequest(target_chars=1000)
+
+
+def test_chapter_draft_prompt_is_prose_not_skeleton():
+    from app.prompt_registry import PROMPT_SEEDS
+
+    name, version, _model, template = next(item for item in PROMPT_SEEDS if item[0] == "authoring.chapter_draft")
+    assert name == "authoring.chapter_draft"
+    assert version == "1.0.0"
+    assert "完整正文" in template
+    assert "2200-3000" in template
+    assert "章节规划" in template
+    assert "不提朱雀或 AIGC" in template

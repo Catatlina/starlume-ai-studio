@@ -2209,6 +2209,50 @@ $target_chars 字左右（只约束 skeleton_text，不约束未来正文篇幅�
 
 只输出合法 JSON，不要 Markdown 代码块，不要解释。"""),
 
+    ("authoring.chapter_draft", "1.0.0", "deepseek",
+     """你是 Starlume AI 的职业中文网文作者。请根据作者意图和已确认故事资料，直接写出第 $chapter_seq 章可供作者审阅的完整正文。
+
+【写作边界】
+1. 作者意图、已确认人物/世界观/主线、当前章节已有正文和上一章结尾是硬约束；资料没有的事实不要擅自补成定论。
+2. 先让人物在眼前压力下行动，再让信息随着行动、对话、误会、选择和结果出现。不要把资料改写成设定介绍，不要替读者总结意义。
+3. 本章必须有清楚的现场、推进中的冲突、可见结果和章末压力；要让读者能顺着人物行动读下去，而不是看到一份大纲扩写。
+4. 叙事可以有爽点，但爽点必须落在具体结果、反击、收益或处境变化上；不要用空泛的情绪反应或群体反应代替结果。
+5. 对话要像人物当场说话，允许打断、回避、误解和没说完；不要让所有人物轮流解释背景和正确答案。
+6. 不刻意加入错字、随机口语、无意义动作或检测规避痕迹；只写人物会注意到、会做出的具体反应。
+7. 不输出章节规划、场景标签、写作说明、检测说明、AI说明、JSON 之外的解释，不提朱雀或 AIGC。
+
+【篇幅硬门禁】
+正文 body 合计必须为 2200-3000 个可见中文字符（不计空白），目标约 $target_chars 字。不能用省略号、摘要、重复句或占位语凑长度；不能少于 2200，也不能超过 3000。body 至少分成 6 个自然段，对话单独成段，段落之间使用换行。
+
+【作者本章意图】
+$author_intent
+
+【章节】
+第 $chapter_seq 章：$chapter_title
+
+【当前章节已有正文】
+$chapter_text
+
+【上一章结尾】
+$previous_chapter_tail
+
+【已确认人物】
+$characters
+
+【主线与故事线】
+$plot
+
+【待回收伏笔】
+$foreshadowing
+
+【已确认世界观】
+$worldview
+
+【作品元资料】
+$novel_meta
+
+只返回合法 JSON：{"chapter":{"title":"本章标题","body":["完整正文段落一","完整正文段落二","完整正文段落三","完整正文段落四","完整正文段落五","完整正文段落六"]}}。不要 Markdown 代码块，不要额外解释。"""),
+
     # ═══ V3 Story Arc（§4，单层实体化，不做阶段/场景层） ═══
     ("bootstrap.generate_story_arc", "1.0.0", "deepseek",
      """你是剧情架构师。请为《$selected_title》规划本书的「故事弧（Story Arc）」列表——每条弧是一条贯穿全书的叙事线索（如"第一次创业""父子和解""复仇布局"）。
@@ -2605,6 +2649,7 @@ OUTPUT_CONTRACTS: dict[str, str] = {
     "editor_deai":          '{"text":"去AI味后文本"}',
     "summarize_chapter":    '{"summary":"","entities":[],"timeline":[],"foreshadowings":[]}',
     "gen_next_chapter":     '{"chapter":{"title":"第N章 创意标题","body":["段落一","段落二","段落三","段落四","段落五","段落六","段落七","段落八"]}} (body 至少 8 段)',
+    "chapter_draft":        '{"chapter":{"title":"本章标题","body":["完整正文段落一","完整正文段落二","完整正文段落三","完整正文段落四","完整正文段落五","完整正文段落六"]}}（body 至少 6 段，正文合计2200-3000个可见字）',
     "book_analysis":        '{"title":"书名","total_paragraphs":0,"opening_hook":"开篇钩子分析","detected_tropes":["套路"],"rhythm":"节奏判断","avg_paragraph_length":0,"structure_cards":{"three_act":"三幕结构判断","save_the_cat":"关键节拍判断"},"style_profile":{"tone":"文风","strengths":["优点"]},"risks":["风险"],"recommendations":["建议"]}',
     "gen_daily_brief":      '{"title":"标题","body":["段落或脚本分镜"],"meta":{"tags":["标签"],"summary":"摘要","cta":"互动引导"}}',
     "hm_daily_brief":       '{"wechat_draft":"公众号草稿","toutiao_draft":"头条草稿","xhs_draft":"小红书草稿"}',

@@ -242,7 +242,7 @@ def init_db() -> None:
         "summarize_chapter", "summarize_volume", "summarize_book",
         "gen_next_chapter", "extract_entities", "extract_foreshadowing", "expand_outline",
         "extract_timeline", "extract_arcs",
-        "chapter_skeleton",
+        "chapter_skeleton", "chapter_draft",
         "gen_short_titles", "gen_short_story", "review_short",
         "gen_video_script", "fetch_hotspots", "gen_daily_brief",
         "hm_daily_brief", "hm_title_variants", "hm_material_suggestions",
@@ -269,7 +269,7 @@ def init_db() -> None:
     ]
     # Creative long-form nodes get a slightly higher temperature; structured
     # planning/audit nodes stay at 0.7 default.
-    CREATIVE_TASKS = {"write_chapter_draft", "write_polish", "final_humanize",
+    CREATIVE_TASKS = {"write_chapter_draft", "chapter_draft", "write_polish", "final_humanize",
                       "gen_chapter1", "gen_next_chapter"}
     for task_type in task_types:
         temperature = 1.0 if task_type in CREATIVE_TASKS else 0.7

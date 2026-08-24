@@ -2998,7 +2998,8 @@ body {
 .chapter-skeleton-scene-grid b { display: block; color: #9aa3b7; font-size: 8px; font-weight: 600; }
 .chapter-skeleton-supporting-facts > div + div { margin-top: 5px; padding-top: 5px; border-top: 1px solid #e9edf6; }
 .chapter-skeleton-supporting-facts .warning p { color: #b97625; }
-.chapter-skeleton-save { display: inline-flex; align-items: center; gap: 5px; width: 100%; justify-content: center; margin-top: 8px; }
+.chapter-skeleton-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 8px; }
+.chapter-skeleton-use, .chapter-skeleton-save { display: inline-flex; align-items: center; gap: 5px; width: 100%; justify-content: center; margin-top: 0; }
 .chapter-skeleton-footnote, .chapter-skeleton-empty { margin: 7px 0 0; color: #8a92a4; font-size: 9px; line-height: 1.5; }
 [data-theme="dark"] .editor-author-led-badge { color: #b9c5ff; background: #242d55; border-color: #364375; }
 [data-theme="dark"] .chapter-skeleton-panel { color: #edf0f7; background: #171b2c; border-color: #303852; box-shadow: none; }
