@@ -116,6 +116,7 @@ SCENE_BUDGET_RETRY_RATIO = 0.82
 SCENE_BUDGET_RETRY_MAX_OVERFLOW_CHARS = 480
 SCENE_BUDGET_RETRY_MIN_HEADROOM_CHARS = 180
 SCENE_BUDGET_RETRY_COMPLETION_MARGIN = 1.05
+SCENE_BUDGET_RETRY_SAFETY_MARGIN_CHARS = 48
 SCENE_HANDOFF_SCHEMA = "scene-handoff-v1"
 # Platform limits are not reader targets.  The active quality profile now
 # derives a reader-facing chapter budget before planning and prose generation.
@@ -3816,10 +3817,15 @@ class GenerationEngine:
             int(remaining_scene_budget * SCENE_BUDGET_RETRY_RATIO),
             int(previous_candidate_chars * 0.80),
         )
-        # The caller has already reserved future-scene minimums.  Capping here
-        # preserves that reservation while retaining enough space above the
-        # current scene minimum for a natural, complete rewrite.
-        return min(remaining_scene_budget, requested_envelope)
+        # The caller has already reserved future-scene minimums.  Keep a small
+        # additional buffer because a Provider can naturally overshoot a
+        # character instruction by a few characters; the chapter hard ceiling
+        # itself must never be relaxed.
+        safe_remaining_budget = max(
+            minimum_scene_chars,
+            remaining_scene_budget - SCENE_BUDGET_RETRY_SAFETY_MARGIN_CHARS,
+        )
+        return min(safe_remaining_budget, requested_envelope)
 
     @staticmethod
     def _is_style_only_retry(previous_issue_codes: set[str]) -> bool:

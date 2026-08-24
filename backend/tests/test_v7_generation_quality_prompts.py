@@ -2039,7 +2039,7 @@ def test_budget_retry_envelope_preserves_scene_minimum_and_chapter_ceiling():
         remaining_scene_budget=520,
         minimum_scene_chars=300,
         previous_candidate_chars=1100,
-    ) == 520
+    ) == 472
     assert GenerationEngine._budget_retry_max_chars(
         remaining_scene_budget=1000,
         minimum_scene_chars=300,
@@ -2049,7 +2049,7 @@ def test_budget_retry_envelope_preserves_scene_minimum_and_chapter_ceiling():
         remaining_scene_budget=350,
         minimum_scene_chars=300,
         previous_candidate_chars=1100,
-    ) == 350
+    ) == 302
 
 
 def test_expression_only_scene_retry_can_get_one_fresh_style_path():
