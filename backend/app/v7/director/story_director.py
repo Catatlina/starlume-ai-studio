@@ -274,6 +274,7 @@ class StoryDirector:
         outline: str | None = None,
         target_word_count: int = 3000,
         allow_rework: bool = False,
+        max_reworks: int | None = None,
     ) -> dict[str, Any]:
         """Run the full 7-step agent loop for one chapter.
 
@@ -438,6 +439,7 @@ class StoryDirector:
                     chapter_number,
                     generation,
                     allow_rework=allow_rework,
+                    max_reworks=max_reworks,
                     plan=plan,
                 )
                 generation = observation["generation"]
@@ -871,6 +873,7 @@ class StoryDirector:
         generation: dict[str, Any],
         *,
         allow_rework: bool,
+        max_reworks: int | None,
         plan: dict[str, Any],
     ) -> dict[str, Any]:
         def review_input(current: dict[str, Any]) -> dict[str, Any]:
@@ -937,6 +940,11 @@ class StoryDirector:
             review_hold = True
         score = float(review_data.get("overall_score") or 0.0)
         rework_count = 0  # 完整重写次数，计入MAX_REWORKS配额
+        rework_limit = (
+            MAX_REWORKS
+            if max_reworks is None
+            else max(0, min(MAX_REWORKS, int(max_reworks)))
+        )
         local_repair_count = 0  # P2-1 质量整改：本地修复次数，不计入MAX_REWORKS配额
         force_full_rework = False
 
@@ -1004,7 +1012,7 @@ class StoryDirector:
                 not evaluate_review(review_data, project_id=self.project_id, user_id=self.user_id)["passed"]
                 or consistency_failed  # 一致性检查不通过也触发重写
             )
-            and rework_count < MAX_REWORKS
+            and rework_count < rework_limit
             and (local_repair_count < MAX_LOCAL_REPAIRS or force_full_rework)
             and await self.permission_system.can_auto_decide("chapter_rework", 0.9)
         ):

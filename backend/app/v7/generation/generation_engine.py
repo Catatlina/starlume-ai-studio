@@ -6683,6 +6683,11 @@ class GenerationEngine:
         # beats and continuity constraints, but prose is written in one
         # chapter-sized transaction so an early scene cannot strand the final
         # scene in an impossible remainder.
+        writer_outline = outline or ""
+        if prompt and prompt != outline:
+            writer_outline = (
+                f"{writer_outline}\n\n{prompt}" if writer_outline else prompt
+            )
         async with self.tracer.trace_step(
             "generation.ai_generate",
             "ai_generation",
@@ -6692,7 +6697,7 @@ class GenerationEngine:
                 chapter_number=chapter_number,
                 context=context,
                 scene_plan=scene_plan,
-                outline=outline or prompt,
+                outline=writer_outline,
                 target_word_count=target_word_count,
                 chapter_min_chars=minimum_chapter_chars,
                 chapter_max_chars=generation_sequence_max_chars,
@@ -7546,11 +7551,21 @@ class GenerationEngine:
             outline,
             target_word_count,
         )
+        early_chapter_contract = ""
+        if chapter_number <= 3:
+            early_chapter_contract = (
+                "前两段必须让本章核心异常、外部阻力或人物正在追逐的目标落地；"
+                "纯环境和日常铺垫不得连续超过120字。开篇的每个日常动作都必须同时带出线索、"
+                "风险或人物选择，不能先写一整段安静环境再引出事件。"
+                "本章的关键规则或金手指第一次出现时，先给可见征兆，再给人物反应；"
+                "至少让一个具体失败后果、资源损失、追查压力或伤势在章内可见，不能只写‘隐约不安’。"
+            )
         writer_system_prompt = (
             "你是同一本中文网文的稳定正文作者。只输出完整章节正文，不输出标题、提纲、"
             "分析或工程说明。必须把给定节拍写成连续现场，保证爽点、因果、人物行为和章末落点；"
             f"正文汉字数必须在 {minimum_chars}-{hard_max_chars} 之间，写完结果立即收束。"
             "不能通过删掉关键事件、用省略号或解释性总结来满足字数。"
+            + early_chapter_contract
             + third_person_generation_contract()
             + content_generation_contract(self.quality_profile)
         )

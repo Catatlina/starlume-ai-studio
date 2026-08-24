@@ -388,7 +388,13 @@ async def generate_v7_chapter(
             resolved_number,
             prompt=effective_prompt,
             outline=effective_outline,
-            allow_rework=False,
+            # One review-informed full-chapter rewrite is a generation
+            # fallback, not the normal post-write humanizer.  Keeping it
+            # bounded prevents the old 3-attempt audit loop from consuming
+            # Provider budget while allowing a first draft with a concrete
+            # pacing/foreshadowing defect to be repaired before persistence.
+            allow_rework=True,
+            max_reworks=1,
         )
         result["canonical_engine"] = "v7"
         result["chapter_number"] = resolved_number
