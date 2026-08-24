@@ -18,6 +18,7 @@ from app.v7.generation.generation_engine import (
     AIGatewayError,
     DeAIPipeline,
     GenerationEngine,
+    SCENE_COMPRESSED_RETRY_COMPLETION_HEADROOM_TOKENS,
     SCENE_DEEPSEEK_OVERLONG_REPAIR_MARGIN,
     SCENE_DEEPSEEK_FINAL_TRUNCATION_REPAIR_MARGIN,
     SCENE_BUDGET_RETRY_COMPLETION_MARGIN,
@@ -2047,8 +2048,11 @@ def test_scene_overlong_retry_keeps_completion_headroom():
         token_margin=SCENE_DEEPSEEK_OVERLONG_REPAIR_MARGIN,
     )
 
-    assert retry_limit == int(850 * SCENE_DEEPSEEK_OVERLONG_REPAIR_MARGIN)
-    assert retry_limit < 850
+    assert retry_limit == (
+        int(850 * SCENE_DEEPSEEK_OVERLONG_REPAIR_MARGIN)
+        + SCENE_COMPRESSED_RETRY_COMPLETION_HEADROOM_TOKENS
+    )
+    assert retry_limit > 850
 
 
 def test_truncated_scene_never_enters_overlong_envelope_shrink_mode():
