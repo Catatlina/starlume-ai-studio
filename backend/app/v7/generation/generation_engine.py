@@ -92,7 +92,7 @@ from ..integration.quality import CHAPTER_MIRROR_HARD_GATE, PAYOFF_VARIETY_HARD_
 logger = logging.getLogger(__name__)
 
 CHAPTER_STATE_TYPE = "chapter"
-SCENE_SERIAL_GENERATION_VERSION = "2.36.0"
+SCENE_SERIAL_GENERATION_VERSION = "2.37.0"
 # Keep the canonical writer loop intentionally small.  Candidate fan-out and
 # local prose surgery belong to explicit/manual tooling, not the production
 # chapter path; nested retries made the writer see too many competing rules.
@@ -5461,12 +5461,47 @@ class GenerationEngine:
                 # is needed to finish the same scene.  Only complete Provider
                 # output is eligible for length and pacing validation.
                 if not truncated:
-                    if self._scene_exceeds_chapter_budget(
-                        accepted_chars=accepted_chars,
-                        candidate_chars=candidate_word_count,
-                        future_minimum_chars=future_minimum_chars,
-                        chapter_max_chars=chapter_max_chars,
-                    ):
+                    budget_overrun = (
+                        accepted_chars
+                        + candidate_word_count
+                        + future_minimum_chars
+                        - chapter_max_chars
+                    )
+                    if budget_overrun > 0 and future_target_chars:
+                        # A future reservation is a planning signal, not a
+                        # fixed per-scene quota. If a complete current scene
+                        # naturally runs long, move the required amount of
+                        # planned space out of later beats and recompute the
+                        # reserve before rejecting it. Without this step a
+                        # valid scene could be rejected solely because the
+                        # old proportional reservation still assumed every
+                        # later beat would keep its original target.
+                        if self._rebalance_future_scene_targets(
+                            cards,
+                            future_start=index,
+                            excess_chars=budget_overrun,
+                        ):
+                            future_target_chars = sum(
+                                int(future_card.get("target_words") or 0)
+                                for future_card in cards[index:]
+                            )
+                            future_minimum_chars = self._future_scene_completion_reserve_chars(
+                                cards,
+                                current_scene_number=index,
+                                accepted_chars=accepted_chars,
+                                chapter_max_chars=chapter_max_chars,
+                            )
+                            scene_max_chars = min(
+                                chapter_max_chars - accepted_chars - future_minimum_chars,
+                                soft_provider_capacity,
+                            )
+                            budget_overrun = (
+                                accepted_chars
+                                + candidate_word_count
+                                + future_minimum_chars
+                                - chapter_max_chars
+                            )
+                    if budget_overrun > 0:
                         issues.append({
                             "code": "scene_chapter_budget_overrun",
                             "severity": "high",
