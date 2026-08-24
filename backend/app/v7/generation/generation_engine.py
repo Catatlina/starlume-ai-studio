@@ -94,7 +94,7 @@ logger = logging.getLogger(__name__)
 
 CHAPTER_STATE_TYPE = "chapter"
 SCENE_SERIAL_GENERATION_VERSION = "2.45.0"
-CHAPTER_SINGLE_PASS_GENERATION_VERSION = "2.47.0"
+CHAPTER_SINGLE_PASS_GENERATION_VERSION = "2.48.0"
 # Keep the canonical writer loop intentionally small.  Candidate fan-out and
 # local prose surgery belong to explicit/manual tooling, not the production
 # chapter path; nested retries made the writer see too many competing rules.
@@ -7651,7 +7651,21 @@ class GenerationEngine:
                 # beats.  Reuse the complete candidate as a compression
                 # source so the next call has a concrete edit target instead
                 # of sampling the same overlong narrative path again.
-                token_limit = max(2600, min(3000, int(hard_max_chars * 0.92)))
+                observed_tokens = int(result.get("tokens_output") or 0)
+                if observed_tokens > 0 and candidate_chars > 0:
+                    # DeepSeek's completion-token count is not a Chinese
+                    # character count.  Calibrate the compact pass from the
+                    # actual response rather than applying a fixed token
+                    # percentage that can still produce another 3500-char
+                    # chapter.  Keep a small completion margin so the model
+                    # can finish the final consequence and hook.
+                    observed_chars_per_token = candidate_chars / observed_tokens
+                    calibrated_tokens = int(
+                        hard_max_chars / max(0.75, observed_chars_per_token) * 0.94
+                    )
+                else:
+                    calibrated_tokens = int(hard_max_chars * 0.80)
+                token_limit = max(1800, min(3000, calibrated_tokens))
                 retry_feedback = (
                     "\n\n【整章预算收束要求】上一版完整但超出内部章节上限。"
                     f"本次从头重写并严格收束在 {minimum_chars}-{hard_max_chars} 字；"
