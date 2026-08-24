@@ -108,6 +108,7 @@ SCENE_STYLE_RETRY_MAX_ATTEMPTS = 3
 # budget and never rescues a materially oversized scene.
 SCENE_FINAL_BUDGET_RETRY_MAX_ATTEMPTS = 3
 SCENE_FINAL_BUDGET_RETRY_RATIO = 0.62
+SCENE_FINAL_BUDGET_RETRY_MAX_OVERFLOW_CHARS = 480
 SCENE_HANDOFF_SCHEMA = "scene-handoff-v1"
 # Platform limits are not reader targets.  The active quality profile now
 # derives a reader-facing chapter budget before planning and prose generation.
@@ -3775,7 +3776,7 @@ class GenerationEngine:
             and previous_issue_codes == {"scene_chapter_budget_overrun"}
             and future_minimum_chars == 0
             and future_target_chars == 0
-            and 0 < overflow <= SCENE_NATURAL_LENGTH_TOLERANCE_CHARS
+            and 0 < overflow <= SCENE_FINAL_BUDGET_RETRY_MAX_OVERFLOW_CHARS
         )
 
     @staticmethod

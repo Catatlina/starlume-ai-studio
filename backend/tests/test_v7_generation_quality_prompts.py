@@ -1997,7 +1997,16 @@ def test_near_boundary_final_scene_can_get_one_tight_budget_retry_only():
         previous_issue_codes={"scene_chapter_budget_overrun"},
         attempt=1,
         max_attempts=2,
-        projected_chars=3065,
+        projected_chars=3480,
+        chapter_max_chars=3000,
+        future_minimum_chars=0,
+        future_target_chars=0,
+    ) is True
+    assert GenerationEngine._can_extend_final_budget_retry(
+        previous_issue_codes={"scene_chapter_budget_overrun"},
+        attempt=1,
+        max_attempts=2,
+        projected_chars=3481,
         chapter_max_chars=3000,
         future_minimum_chars=0,
         future_target_chars=0,
