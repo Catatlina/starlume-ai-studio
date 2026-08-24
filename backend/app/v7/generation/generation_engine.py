@@ -94,7 +94,7 @@ logger = logging.getLogger(__name__)
 
 CHAPTER_STATE_TYPE = "chapter"
 SCENE_SERIAL_GENERATION_VERSION = "2.45.0"
-CHAPTER_SINGLE_PASS_GENERATION_VERSION = "2.49.0"
+CHAPTER_SINGLE_PASS_GENERATION_VERSION = "2.50.0"
 # Keep the canonical writer loop intentionally small.  Candidate fan-out and
 # local prose surgery belong to explicit/manual tooling, not the production
 # chapter path; nested retries made the writer see too many competing rules.
@@ -7574,15 +7574,20 @@ class GenerationEngine:
             max(3200, int(hard_max_chars * 1.15)),
         )
         retry_feedback = ""
+        retry_prompt_override: str | None = None
+        retry_system_prompt = writer_system_prompt
         retry_warnings: list[dict[str, Any]] = []
 
         for attempt in range(2):
-            prompt = base_prompt + retry_feedback
+            prompt = retry_prompt_override or (base_prompt + retry_feedback)
+            retry_temperature = 0.62 if attempt == 0 else 0.52
+            if retry_prompt_override:
+                retry_temperature = 0.25
             result = await self.ai_gateway.generate(
                 prompt,
-                system_prompt=writer_system_prompt,
+                system_prompt=retry_system_prompt,
                 max_tokens=token_limit,
-                temperature=0.62 if attempt == 0 else 0.52,
+                temperature=retry_temperature,
                 prompt_name=(
                     "v7.generation.chapter_single_pass"
                     if attempt == 0
@@ -7637,20 +7642,25 @@ class GenerationEngine:
                     f"provider_truncated={truncated}"
                 ),
             })
-            if truncated:
+            if truncated and candidate_chars <= hard_max_chars:
+                retry_prompt_override = None
+                retry_system_prompt = writer_system_prompt
                 token_limit = min(6000, max(token_limit + 500, int(token_limit * 1.20)))
                 retry_feedback = (
                     "\n\n【整章重写要求】上一版在 Provider 输出上限处截断。"
                     f"本次必须在 {minimum_chars}-{hard_max_chars} 字内完成全部节拍、爽点反馈和章末落点；"
                     "从头完整写，不得续写截断尾部，不得省略关键结果。"
                 )
-            elif candidate_chars > hard_max_chars:
+            elif truncated or candidate_chars > hard_max_chars:
                 # A lower token ceiling alone is not a reliable character
                 # ceiling for Chinese Providers: a complete response can
                 # still overshoot after the model has satisfied the story
-                # beats.  Reuse the complete candidate as a compression
-                # source so the next call has a concrete edit target instead
-                # of sampling the same overlong narrative path again.
+                # beats.  Reuse an overlong candidate as a compression source
+                # so the next call has a concrete edit target instead of
+                # increasing the cap and sampling an even longer path.  A
+                # truncated candidate may be incomplete at the tail, but it
+                # is still safer to compress/recover its existing event path
+                # than to grant another larger full-chapter budget.
                 observed_tokens = int(result.get("tokens_output") or 0)
                 if observed_tokens > 0 and candidate_chars > 0:
                     # DeepSeek's completion-token count is not a Chinese
@@ -7672,10 +7682,21 @@ class GenerationEngine:
                 # 2600-token completion floor instead of accepting a cut-off
                 # chapter.
                 token_limit = max(2600, min(3000, calibrated_tokens + 200))
-                retry_feedback = (
-                    "\n\n【整章预算收束要求】上一版完整但超出内部章节上限。"
+                retry_system_prompt = (
+                    "你是中文网文的终稿压缩编辑。只输出压缩后的完整正文，不输出标题、"
+                    "分析、提纲或修改说明。上一版正文已经完成故事事件；你的任务是删除冗余，"
+                    "让终稿在指定字数内自然收束，不能重新创作一套故事。"
+                )
+                retry_prompt_override = (
+                    "【整章预算收束要求】上一版完整但超出内部章节上限。"
                     f"本次压缩目标为 2200-{hard_max_chars} 字，并严格收束在 {minimum_chars}-{hard_max_chars} 字；"
-                    "以下上一版正文已经完成事件，不得新增支线或改变因果；以它为压缩底稿，"
+                    + (
+                        "上一版可能在 Provider 输出上限处截断；以已有事件路径为底稿，"
+                        "补齐已经规划好的结果和章末钩子，但不得新增支线或改变因果；"
+                        if truncated
+                        else "以下上一版正文已经完成事件，不得新增支线或改变因果；"
+                    )
+                    + "以它为压缩底稿，"
                     "保留目标、阻碍、主动选择、爽点反馈、关键线索和章末钩子，"
                     "优先合并重复反应、重复环境、百科解释和同一事件的二次总结，"
                     "不要删掉导致结果成立的动作。完成结果后立即收束。\n\n"
@@ -7684,6 +7705,8 @@ class GenerationEngine:
                     "【上一版完整正文结束】"
                 )
             else:
+                retry_prompt_override = None
+                retry_system_prompt = writer_system_prompt
                 token_limit = min(6000, max(token_limit + 400, int(token_limit * 1.10)))
                 retry_feedback = (
                     "\n\n【整章完成要求】上一版过短，不能用提纲或总结补长度。"
