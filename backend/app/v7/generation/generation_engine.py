@@ -107,15 +107,15 @@ SCENE_STYLE_RETRY_MAX_ATTEMPTS = 3
 # narrower than style/truncation retries: it never relaxes the 2200-3000 reader
 # budget and never rescues a materially oversized scene.
 SCENE_BUDGET_RETRY_MAX_ATTEMPTS = 3
-# A budget retry must leave room for a complete scene.  The chapter ceiling
-# and the future-scene minimums are already hard constraints; shrinking the
-# Provider envelope to 62% of the remaining space made short final scenes
-# fail their own minimum-length contract.  Keep a bounded compression signal,
-# but never starve completion headroom.
+# A budget retry must leave room for a complete scene while compensating for
+# DeepSeek's observed character/token variance.  The chapter ceiling and the
+# future-scene minimums are already hard constraints; 0.72 starved a short
+# final scene, while the separately calibrated 0.86 completed the scene and
+# stayed within the remaining chapter envelope.
 SCENE_BUDGET_RETRY_RATIO = 0.82
 SCENE_BUDGET_RETRY_MAX_OVERFLOW_CHARS = 480
 SCENE_BUDGET_RETRY_MIN_HEADROOM_CHARS = 180
-SCENE_BUDGET_RETRY_COMPLETION_MARGIN = 1.05
+SCENE_BUDGET_RETRY_COMPLETION_MARGIN = 0.86
 SCENE_BUDGET_RETRY_SAFETY_MARGIN_CHARS = 48
 SCENE_HANDOFF_SCHEMA = "scene-handoff-v1"
 # Platform limits are not reader targets.  The active quality profile now
