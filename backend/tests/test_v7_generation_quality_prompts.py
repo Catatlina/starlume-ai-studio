@@ -2465,6 +2465,46 @@ def test_single_pass_writer_retries_the_whole_chapter_as_one_budget_unit():
     assert len(calls) == 2
     assert result["text"] == "字" * 2400
     assert result["scene_outputs"][0]["attempts"] == 2
+    assert "上一版完整正文（仅用于压缩" in calls[1]["prompt"]
+
+
+def test_single_pass_overlong_candidate_uses_one_bounded_compression_pass():
+    engine = GenerationEngine.__new__(GenerationEngine)
+    engine.quality_profile = select_quality_profile()
+    calls = []
+
+    class Gateway:
+        async def generate(self, prompt, **kwargs):
+            calls.append({"prompt": prompt, **kwargs})
+            text = "字" * (3543 if len(calls) == 1 else 2860)
+            return {
+                "text": text,
+                "provider": "deepseek",
+                "model": "deepseek-chat",
+                "tokens_input": 10,
+                "tokens_output": len(text),
+                "cost": 0.01,
+                "finish_reason": "stop",
+            }
+
+    engine.ai_gateway = Gateway()
+    engine._build_generation_prompt = lambda *_args, **_kwargs: "整章写作提示"
+
+    result = asyncio.run(engine._generate_single_pass_chapter(
+        chapter_number=2,
+        context={"context_layers": {}},
+        scene_plan={"beats": []},
+        outline="承接上一章的冲突",
+        target_word_count=2700,
+        chapter_min_chars=1944,
+        chapter_max_chars=2968,
+        chapter_reader_max_chars=3000,
+    ))
+
+    assert result["word_count"] == 2860
+    assert len(calls) == 2
+    assert calls[1]["max_tokens"] < calls[0]["max_tokens"]
+    assert "不得新增支线或改变因果" in calls[1]["prompt"]
 
 
 def test_expression_only_scene_retry_can_get_one_fresh_style_path():

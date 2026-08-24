@@ -94,7 +94,7 @@ logger = logging.getLogger(__name__)
 
 CHAPTER_STATE_TYPE = "chapter"
 SCENE_SERIAL_GENERATION_VERSION = "2.45.0"
-CHAPTER_SINGLE_PASS_GENERATION_VERSION = "2.46.0"
+CHAPTER_SINGLE_PASS_GENERATION_VERSION = "2.47.0"
 # Keep the canonical writer loop intentionally small.  Candidate fan-out and
 # local prose surgery belong to explicit/manual tooling, not the production
 # chapter path; nested retries made the writer see too many competing rules.
@@ -7645,12 +7645,23 @@ class GenerationEngine:
                     "从头完整写，不得续写截断尾部，不得省略关键结果。"
                 )
             elif candidate_chars > hard_max_chars:
-                token_limit = max(3000, int(token_limit * 0.92))
+                # A lower token ceiling alone is not a reliable character
+                # ceiling for Chinese Providers: a complete response can
+                # still overshoot after the model has satisfied the story
+                # beats.  Reuse the complete candidate as a compression
+                # source so the next call has a concrete edit target instead
+                # of sampling the same overlong narrative path again.
+                token_limit = max(2600, min(3000, int(hard_max_chars * 0.92)))
                 retry_feedback = (
                     "\n\n【整章预算收束要求】上一版完整但超出内部章节上限。"
                     f"本次从头重写并严格收束在 {minimum_chars}-{hard_max_chars} 字；"
-                    "保留目标、阻碍、主动选择、爽点反馈和章末钩子，删除重复反应、重复环境、"
-                    "百科解释和同一事件的二次总结，完成结果后立即收束。"
+                    "以下上一版正文已经完成事件，不得新增支线或改变因果；以它为压缩底稿，"
+                    "保留目标、阻碍、主动选择、爽点反馈、关键线索和章末钩子，"
+                    "优先合并重复反应、重复环境、百科解释和同一事件的二次总结，"
+                    "不要删掉导致结果成立的动作。完成结果后立即收束。\n\n"
+                    "【上一版完整正文（仅用于压缩，不要解释）】\n"
+                    f"{candidate}\n"
+                    "【上一版完整正文结束】"
                 )
             else:
                 token_limit = min(6000, max(token_limit + 400, int(token_limit * 1.10)))
