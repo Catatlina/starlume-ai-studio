@@ -5476,11 +5476,14 @@ class GenerationEngine:
                         # valid scene could be rejected solely because the
                         # old proportional reservation still assumed every
                         # later beat would keep its original target.
-                        if self._rebalance_future_scene_targets(
-                            cards,
-                            future_start=index,
-                            excess_chars=budget_overrun,
-                        ):
+                        previous_reserve = future_minimum_chars
+                        for _ in range(max(1, len(cards))):
+                            if not self._rebalance_future_scene_targets(
+                                cards,
+                                future_start=index,
+                                excess_chars=budget_overrun,
+                            ):
+                                break
                             future_target_chars = sum(
                                 int(future_card.get("target_words") or 0)
                                 for future_card in cards[index:]
@@ -5491,16 +5494,19 @@ class GenerationEngine:
                                 accepted_chars=accepted_chars,
                                 chapter_max_chars=chapter_max_chars,
                             )
-                            scene_max_chars = min(
-                                chapter_max_chars - accepted_chars - future_minimum_chars,
-                                soft_provider_capacity,
-                            )
                             budget_overrun = (
                                 accepted_chars
                                 + candidate_word_count
                                 + future_minimum_chars
                                 - chapter_max_chars
                             )
+                            if budget_overrun <= 0 or future_minimum_chars >= previous_reserve:
+                                break
+                            previous_reserve = future_minimum_chars
+                        scene_max_chars = min(
+                            chapter_max_chars - accepted_chars - future_minimum_chars,
+                            soft_provider_capacity,
+                        )
                     if budget_overrun > 0:
                         issues.append({
                             "code": "scene_chapter_budget_overrun",
