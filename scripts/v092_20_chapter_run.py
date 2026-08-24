@@ -25,6 +25,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--project-id", required=True)
     parser.add_argument("--user-id", required=True)
     parser.add_argument("--platform", default="fanqie")
+    parser.add_argument(
+        "--acceptance-scope",
+        choices=("generation", "publication"),
+        default="generation",
+        help=(
+            "验收范围：generation只验证真实生成/质量/连续性，不调用发布语义评估；"
+            "publication才运行七道发布门禁并要求publish_ready"
+        ),
+    )
     parser.add_argument("--start-chapter", type=int, default=None)
     parser.add_argument("--target-chapters", type=int, default=20)
     parser.add_argument("--output", default="")
@@ -288,6 +297,65 @@ def persist_gate_results(chapter_id: str, text: str, report: Any) -> None:
         conn.close()
 
 
+def validate_generation_result(result: dict[str, Any], text: str) -> dict[str, Any]:
+    """Validate the generation contract without invoking another Provider.
+
+    The V7 runtime already performs planning, prose generation, review and
+    continuity/state persistence.  A generation long run must inspect that
+    evidence directly; it must not call the publication payoff assessor or
+    require human disclosure confirmation before the author has edited prose.
+    """
+    failures: list[dict[str, Any]] = []
+    if result.get("status") != "completed":
+        failures.append({"code": "generation_status", "actual": result.get("status")})
+    if result.get("passed_review") is not True:
+        failures.append({"code": "v7_review", "actual": result.get("passed_review")})
+
+    quality_gate = result.get("quality_gate") or {}
+    if quality_gate.get("passed") is not True:
+        failures.append({
+            "code": "v7_quality_gate",
+            "failures": list(quality_gate.get("failures") or []),
+        })
+
+    continuity = result.get("continuity") or {}
+    if continuity and continuity.get("passed") is False:
+        failures.append({
+            "code": "continuity",
+            "issues": list(continuity.get("issues") or []),
+        })
+
+    budget = result.get("reader_chapter_budget") or {}
+    generation_quality = result.get("generation_quality") or {}
+    try:
+        char_count = len(text)
+        minimum = int(budget.get("minimum_chars") or 0)
+        maximum = int(
+            generation_quality.get("generation_hard_max_chars")
+            or budget.get("maximum_chars")
+            or 3000
+        )
+    except (TypeError, ValueError):
+        char_count, minimum, maximum = len(text), 0, 3000
+    if not text.strip():
+        failures.append({"code": "empty_body"})
+    if minimum and char_count < minimum:
+        failures.append({"code": "below_reader_minimum", "actual": char_count, "minimum": minimum})
+    if maximum and char_count > maximum:
+        failures.append({"code": "above_generation_maximum", "actual": char_count, "maximum": maximum})
+
+    return {
+        "passed": not failures,
+        "scope": "generation",
+        "text_length": char_count,
+        "reader_minimum": minimum,
+        "generation_maximum": maximum,
+        "v7_status": result.get("status"),
+        "review_score": result.get("review_score"),
+        "failures": failures,
+    }
+
+
 async def main() -> None:
     args = parse_args()
     output_file = args.output or f"/tmp/v092_20ch_report_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.json"
@@ -307,8 +375,11 @@ async def main() -> None:
         if start_chapter > args.target_chapters:
             raise ValueError("起始章节已经超过目标章节，未执行长跑")
 
-        metadata = load_novel_metadata(args.novel_id)
-        platform_profile = load_platform_profile(args.project_id, args.platform)
+        metadata: dict[str, Any] = {}
+        platform_profile: dict[str, Any] = {}
+        if args.acceptance_scope == "publication":
+            metadata = load_novel_metadata(args.novel_id)
+            platform_profile = load_platform_profile(args.project_id, args.platform)
         if start_chapter > 1:
             previous = chapter_status(args.novel_id, start_chapter - 1)
             if previous in {"needs_rewrite", "failed"}:
@@ -318,7 +389,10 @@ async def main() -> None:
         log("=" * 60)
         log("v0.9.2真实Provider 20章长跑验收开始")
         log(f"小说ID={args.novel_id}, 目标章节={args.target_chapters}, 起始章节={start_chapter}")
-        log(f"平台={platform_profile.get('platform')}, policy={platform_profile.get('policy_status')}")
+        if args.acceptance_scope == "publication":
+            log(f"平台={platform_profile.get('platform')}, policy={platform_profile.get('policy_status')}")
+        else:
+            log("范围=generation（不运行发布语义评估，不要求AI披露确认）")
         log("=" * 60)
 
         for chapter_number in range(start_chapter, args.target_chapters + 1):
@@ -336,21 +410,36 @@ async def main() -> None:
                 if not text:
                     raise RuntimeError("generated chapter has no persisted body")
 
-                gates_result, report = run_publishing_gates(
-                    result["chapter_id"], text, args.project_id, args.user_id,
-                    args.platform, platform_profile, metadata
-                )
-                result["gates"] = gates_result
-                persist_gate_results(result["chapter_id"], text, report)
-                result["acceptance_success"] = True
-                success_count += 1
-                if gates_result["overall_publish_ready"]:
-                    publish_ready_count += 1
+                if args.acceptance_scope == "generation":
+                    generation_validation = validate_generation_result(result, text)
+                    result["generation_validation"] = generation_validation
+                    result["acceptance_success"] = generation_validation["passed"]
+                    if generation_validation["passed"]:
+                        success_count += 1
+                    log(
+                        f"第{chapter_number}章正文={len(text)}字，"
+                        f"生成验收={'通过' if generation_validation['passed'] else '失败'}，"
+                        f"V7评分={result.get('review_score')}"
+                    )
+                    if not generation_validation["passed"]:
+                        log(f"生成验收失败原因={generation_validation['failures']}")
+                        break
+                else:
+                    gates_result, report = run_publishing_gates(
+                        result["chapter_id"], text, args.project_id, args.user_id,
+                        args.platform, platform_profile, metadata
+                    )
+                    result["gates"] = gates_result
+                    persist_gate_results(result["chapter_id"], text, report)
+                    result["acceptance_success"] = True
+                    success_count += 1
+                    if gates_result["overall_publish_ready"]:
+                        publish_ready_count += 1
 
-                passed = [key for key, value in gates_result["gates"].items() if value["passed"]]
-                failed = [key for key, value in gates_result["gates"].items() if not value["passed"]]
-                log(f"第{chapter_number}章正文={len(text)}字，门禁通过={len(passed)}/7，失败={failed}")
-                log(f"publish_ready={gates_result['overall_publish_ready']}")
+                    passed = [key for key, value in gates_result["gates"].items() if value["passed"]]
+                    failed = [key for key, value in gates_result["gates"].items() if not value["passed"]]
+                    log(f"第{chapter_number}章正文={len(text)}字，门禁通过={len(passed)}/7，失败={failed}")
+                    log(f"publish_ready={gates_result['overall_publish_ready']}")
             except Exception as exc:
                 result["acceptance_success"] = False
                 result["acceptance_error"] = str(exc)
@@ -377,11 +466,18 @@ async def main() -> None:
         json.dump(results, handle, ensure_ascii=False, indent=2, default=str)
 
     log("=" * 60)
-    log(f"生成成功={success_count}/{expected_count}, publish_ready={publish_ready_count}/{success_count}")
+    if args.acceptance_scope == "generation":
+        log(f"生成验收通过={success_count}/{expected_count}")
+    else:
+        log(f"生成成功={success_count}/{expected_count}, publish_ready={publish_ready_count}/{success_count}")
     log(f"完整报告={output_file}")
     log("=" * 60)
 
-    if fatal_error or success_count != expected_count or publish_ready_count != success_count:
+    failed_publication_scope = (
+        args.acceptance_scope == "publication"
+        and publish_ready_count != success_count
+    )
+    if fatal_error or success_count != expected_count or failed_publication_scope:
         raise SystemExit(1)
 
 
