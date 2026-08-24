@@ -3821,6 +3821,7 @@ class GenerationEngine:
             "scene_state_echo",
             "scene_procedural_motion",
             "scene_subject_opening",
+            "scene_payoff_cost_missing",
             "scene_overlong",
             "dash_density",
             "ai_phrase",

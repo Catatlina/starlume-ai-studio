@@ -2199,6 +2199,15 @@ def test_bounded_budget_retry_covers_mixed_scene_overrun_once():
         future_minimum_chars=0,
         future_target_chars=0,
     ) is False
+    assert GenerationEngine._can_extend_budget_retry(
+        previous_issue_codes={"scene_chapter_budget_overrun", "scene_metaphor_density", "scene_payoff_cost_missing"},
+        attempt=1,
+        max_attempts=2,
+        projected_chars=3739,
+        chapter_max_chars=3000,
+        future_minimum_chars=0,
+        future_target_chars=0,
+    ) is True
 
 
 def test_budget_retry_envelope_preserves_scene_minimum_and_chapter_ceiling():
