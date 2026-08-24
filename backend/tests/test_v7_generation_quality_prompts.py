@@ -425,6 +425,21 @@ def test_object_opening_recognises_door_hardware_change():
     assert result["observed_mode"] == "object"
 
 
+def test_object_opening_recognises_subtle_object_motion_and_contact():
+    for text in (
+        "门缝里的灰又动了。苏长庚抬眼看向第七层。",
+        "天还没亮透，怀里的册子贴着胸口发硬。苏长庚停在楼梯口。",
+    ):
+        result = inspect_opening(
+            text,
+            requested_mode="object",
+            chapter_number=2,
+            recent_modes=["action"],
+        )
+        assert result["passed"] is True
+        assert result["observed_mode"] == "object"
+
+
 def test_later_action_does_not_hide_an_unfulfilled_object_opening():
     text = "清晨，藏经阁还没亮透，苏长庚的帚尖已经落在第七层台阶上。门缝里的光随后才亮起来。"
 
