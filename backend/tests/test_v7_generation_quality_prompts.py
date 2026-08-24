@@ -428,7 +428,7 @@ def test_object_opening_recognises_door_hardware_change():
 def test_object_opening_recognises_subtle_object_motion_and_contact():
     for text in (
         "门缝里的灰又动了。苏长庚抬眼看向第七层。",
-        "天还没亮透，怀里的册子贴着胸口发硬。苏长庚停在楼梯口。",
+        "天还没亮透，怀里那本册子贴着胸口发硬。苏长庚停在楼梯口。",
     ):
         result = inspect_opening(
             text,
