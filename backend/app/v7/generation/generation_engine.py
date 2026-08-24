@@ -167,6 +167,10 @@ SCENE_NATURAL_LENGTH_TOLERANCE = 1.13
 # that every scene hit a fixed word count; the chapter ceiling remains the only
 # reader-facing hard limit.
 SCENE_FUTURE_RESERVE_RATIO = 1.00
+# Keep enough room for the final scene to show result, consequence and the
+# next pressure. Without this floor, two natural early scenes can consume the
+# chapter and leave a 300-500 character tail that no Provider can close well.
+SCENE_FINAL_COMPLETION_RESERVE_CHARS = 720
 # Keep a small rounding/paragraph variance allowance.  A 32-character
 # boundary was rejecting otherwise natural scenes by a few dozen characters;
 # chapter-level target reservation remains the hard ceiling.
@@ -4113,6 +4117,21 @@ class GenerationEngine:
                 future_cards,
                 start=current_scene_number + 1,
             )
+        )
+        final_future_card = future_cards[-1]
+        final_future_index = current_scene_number + len(future_cards)
+        final_minimum, _final_nominal_maximum = GenerationEngine._scene_length_bounds(
+            final_future_card,
+            scene_index=final_future_index,
+        )
+        final_natural_capacity = GenerationEngine._scene_allowed_max_chars(
+            final_future_card,
+            scene_index=final_future_index,
+        )
+        future_minimum = max(
+            future_minimum,
+            final_minimum,
+            min(SCENE_FINAL_COMPLETION_RESERVE_CHARS, final_natural_capacity),
         )
         future_natural_capacity = sum(
             GenerationEngine._scene_allowed_max_chars(

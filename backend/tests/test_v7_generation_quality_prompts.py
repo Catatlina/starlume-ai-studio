@@ -29,6 +29,7 @@ from app.v7.generation.generation_engine import (
     SCENE_NATURAL_LENGTH_TOLERANCE_CHARS,
     SCENE_NATURAL_LENGTH_SOFT_OVERFLOW_CHARS,
     SCENE_FUTURE_RESERVE_RATIO,
+    SCENE_FINAL_COMPLETION_RESERVE_CHARS,
     CHAPTER_FINAL_SCENE_NATURAL_VARIANCE_CHARS,
     SCENE_PROVIDER_TOKEN_CAP,
     SCENE_TARGET_MAX_RATIO,
@@ -1947,7 +1948,7 @@ def test_future_scene_reserve_is_proportional_and_not_a_fixed_scene_budget():
 
     assert SCENE_FUTURE_RESERVE_RATIO == 1.0
     assert first_reserve == 1468
-    assert second_reserve == 468
+    assert second_reserve == SCENE_FINAL_COMPLETION_RESERVE_CHARS
     assert final_reserve == 0
     assert first_reserve > sum(
         GenerationEngine._scene_length_bounds(card, scene_index=index)[0]
