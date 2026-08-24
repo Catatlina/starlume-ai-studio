@@ -20,6 +20,16 @@ OPENING_MODES: tuple[str, ...] = (
     "body_sensation",
 )
 
+# A requested opening is a writer-facing direction, not a requirement that
+# every concrete sentence use one narrow keyword family.  In particular, a
+# door glyph going dark, a lock breaking, or light changing is both a concrete
+# object change and an external event that forces a response.  Keep this
+# compatibility map narrow so it fixes that natural boundary without turning
+# the opening gate into a soft pass for unrelated prose.
+OPENING_MODE_COMPATIBLE_OBSERVATIONS: dict[str, frozenset[str]] = {
+    "external_event": frozenset({"object", "environment"}),
+}
+
 OPENING_MODE_LABELS: dict[str, str] = {
     "action": "动作/选择开场",
     "dialogue": "对白冲突开场",
@@ -270,8 +280,13 @@ def inspect_opening(
     recent = [str(mode) for mode in (recent_modes or []) if mode in OPENING_MODES]
     first_sentence = re.split(r"[。！？!?\n]", sample, maxsplit=1)[0]
     flags: list[dict[str, Any]] = []
+    compatible_observations = OPENING_MODE_COMPATIBLE_OBSERVATIONS.get(requested, frozenset())
+    requested_observation_is_compatible = (
+        requested in OPENING_MODES
+        and observed in compatible_observations
+    )
 
-    if requested in OPENING_MODES and observed != requested:
+    if requested in OPENING_MODES and observed != requested and not requested_observation_is_compatible:
         flags.append({
             "code": "opening_mode_mismatch",
             "severity": "high",
@@ -293,11 +308,16 @@ def inspect_opening(
             "message": "开头命中‘一阵/像有人/身体感受’模板化句式",
             "evidence": first_sentence[:120],
         })
-    if observed in recent[-3:]:
+    # Use the requested operator for repetition only when the observed form
+    # is one of its bounded natural realizations.  Otherwise an external event
+    # rendered as a concrete object would be incorrectly treated as a repeat
+    # of the previous object opening.
+    repetition_mode = requested if requested_observation_is_compatible else observed
+    if repetition_mode in recent[-3:]:
         flags.append({
             "code": "opening_mode_repetition",
             "severity": "high",
-            "message": f"开场类型 {observed} 在最近三章重复",
+            "message": f"开场类型 {repetition_mode} 在最近三章重复",
             "evidence": first_sentence[:120],
         })
     if chapter_number == 1 and observed == "body_sensation":

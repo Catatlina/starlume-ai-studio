@@ -358,6 +358,23 @@ def test_external_event_opening_accepts_natural_clock_sound_wording():
     assert result["observed_mode"] == "external_event"
 
 
+def test_external_event_opening_accepts_concrete_object_event():
+    text = "门框上的阵纹在他掌下熄灭的瞬间，指腹传来一阵灼热。"
+
+    result = inspect_opening(
+        text,
+        requested_mode="external_event",
+        chapter_number=3,
+        recent_modes=["action", "object"],
+    )
+
+    assert result["passed"] is True
+    assert result["requested_mode"] == "external_event"
+    assert result["observed_mode"] == "object"
+    assert not any(item["code"] == "opening_mode_mismatch" for item in result["flags"])
+    assert not any(item["code"] == "opening_mode_repetition" for item in result["flags"])
+
+
 def test_action_opening_allows_short_scene_lead_before_early_visible_action():
     text = (
         "午后的日头正毒，外门广场的青石砖被晒得发烫。"
