@@ -91,11 +91,16 @@ from ..integration.quality import CHAPTER_MIRROR_HARD_GATE, PAYOFF_VARIETY_HARD_
 logger = logging.getLogger(__name__)
 
 CHAPTER_STATE_TYPE = "chapter"
-SCENE_SERIAL_GENERATION_VERSION = "2.33.0"
+SCENE_SERIAL_GENERATION_VERSION = "2.34.0"
 # Keep the canonical writer loop intentionally small.  Candidate fan-out and
 # local prose surgery belong to explicit/manual tooling, not the production
 # chapter path; nested retries made the writer see too many competing rules.
 SCENE_SERIAL_MAX_ATTEMPTS = 2
+# A pure expression repair may use one additional independent writing path;
+# budget, truncation, POV and fact-contract failures never receive this
+# extension.  This keeps the bounded loop from turning into open-ended
+# polishing while giving the real Provider one fresh style route.
+SCENE_STYLE_RETRY_MAX_ATTEMPTS = 3
 SCENE_HANDOFF_SCHEMA = "scene-handoff-v1"
 # Platform limits are not reader targets.  The active quality profile now
 # derives a reader-facing chapter budget before planning and prose generation.
@@ -3731,6 +3736,20 @@ class GenerationEngine:
         )
 
     @staticmethod
+    def _can_extend_style_retry(
+        *,
+        previous_issue_codes: set[str],
+        attempt: int,
+        max_attempts: int,
+    ) -> bool:
+        """Allow one fresh writing path for expression-only failures."""
+        return bool(
+            max_attempts == SCENE_SERIAL_MAX_ATTEMPTS
+            and attempt == SCENE_SERIAL_MAX_ATTEMPTS - 1
+            and GenerationEngine._is_style_only_retry(previous_issue_codes)
+        )
+
+    @staticmethod
     def _is_style_only_retry(previous_issue_codes: set[str]) -> bool:
         """Return whether a retry can be regenerated from contracts alone."""
         return bool(previous_issue_codes) and previous_issue_codes.issubset({
@@ -5278,6 +5297,13 @@ class GenerationEngine:
                     max_attempts=max_scene_attempts,
                 ):
                     max_scene_attempts += 1
+                    can_retry = True
+                elif self._can_extend_style_retry(
+                    previous_issue_codes=previous_issue_codes,
+                    attempt=attempt,
+                    max_attempts=max_scene_attempts,
+                ):
+                    max_scene_attempts = SCENE_STYLE_RETRY_MAX_ATTEMPTS
                     can_retry = True
                 if can_retry:
                     feedback = "；".join(

@@ -1958,6 +1958,24 @@ def test_scene_truncation_can_get_one_final_attempt_but_other_repairs_cannot():
     ) is False
 
 
+def test_expression_only_scene_retry_can_get_one_fresh_style_path():
+    assert GenerationEngine._can_extend_style_retry(
+        previous_issue_codes={"scene_explanatory_narration", "scene_metaphor_density"},
+        attempt=1,
+        max_attempts=2,
+    ) is True
+    assert GenerationEngine._can_extend_style_retry(
+        previous_issue_codes={"scene_chapter_budget_overrun"},
+        attempt=1,
+        max_attempts=2,
+    ) is False
+    assert GenerationEngine._can_extend_style_retry(
+        previous_issue_codes={"scene_metaphor_density"},
+        attempt=2,
+        max_attempts=3,
+    ) is False
+
+
 def test_scene_budget_guard_rejects_candidate_that_consumes_future_scene_minimums():
     accepted_chars = 4300
     candidate_chars = 700
