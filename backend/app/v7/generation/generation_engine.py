@@ -124,6 +124,11 @@ SCENE_BUDGET_RETRY_COMPLETION_MARGIN = 0.86
 # give the Provider less token headroom so its Chinese character output lands
 # inside the already-computed remaining budget.
 SCENE_BUDGET_RETRY_PROVIDER_MARGIN = 0.72
+# The normal compressed-retry headroom is intentionally generous for prose
+# completion.  The final-scene budget path has already reserved the exact
+# remaining chapter space, so a smaller headroom is needed when a Provider
+# ignores the character wording but still obeys its token ceiling.
+SCENE_BUDGET_RETRY_COMPLETION_HEADROOM_TOKENS = 200
 # Character budgets and Provider tokens are not one-to-one for Chinese prose.
 # The 0.86 compression ratio is useful for reducing runaway output, but on a
 # tight final scene it turned an 852-character envelope into 732 tokens and
@@ -3753,7 +3758,11 @@ class GenerationEngine:
         # initial expansion margin.
         token_budget = int(maximum * margin)
         if margin < 1.0 or maximum <= SCENE_BUDGET_RETRY_SMALL_SCENE_MAX_CHARS:
-            token_budget += SCENE_COMPRESSED_RETRY_COMPLETION_HEADROOM_TOKENS
+            token_budget += (
+                SCENE_BUDGET_RETRY_COMPLETION_HEADROOM_TOKENS
+                if margin == SCENE_BUDGET_RETRY_PROVIDER_MARGIN
+                else SCENE_COMPRESSED_RETRY_COMPLETION_HEADROOM_TOKENS
+            )
         return max(
             240,
             min(
