@@ -3926,6 +3926,51 @@ class GenerationEngine:
         })
 
     @staticmethod
+    def _combined_style_retry_route(previous_issue_codes: set[str]) -> str | None:
+        """Build one structural repair route when several prose signals co-occur.
+
+        A scene can be naturally readable only when its event timing, paragraph
+        landings, and image density are repaired together.  Selecting one
+        detector branch (the old behaviour) made a retry fix one surface signal
+        while preserving the same underlying route-log structure.
+        """
+        structural_codes = {
+            "scene_metaphor_density",
+            "scene_procedural_motion",
+            "scene_subject_opening",
+            "scene_repeated_action_loop",
+            "scene_state_echo",
+        }
+        matched = previous_issue_codes.intersection(structural_codes)
+        if len(matched) < 2:
+            return None
+        requirements: list[str] = []
+        if "scene_procedural_motion" in matched:
+            requirements.append(
+                "前两段或前240字内必须让一个具体阻碍、线索反馈、他人介入或带代价的路线选择改变行动；"
+                "压缩无事件的走路、寻找、观察和身体反应，不写成行程记录。"
+            )
+        if "scene_subject_opening" in matched:
+            requirements.append(
+                "段落起笔自然轮换，让物件、声音、环境后果、对白、他人反应和动作结果承担段首；"
+                "不要连续用同一主语起笔，也不要把人名机械替换成‘他/她’。"
+            )
+        if "scene_metaphor_density" in matched:
+            requirements.append(
+                "优先使用可观察的颜色、位置、触感、声音、动作和后果；非对白只保留极少数真正服务现场的比喻，"
+                "不得连续堆叠‘像、好像、仿佛、如同、宛如、犹如’。"
+            )
+        if "scene_repeated_action_loop" in matched:
+            requirements.append(
+                "同一拿起、放下、回头或转身动作只保留一次，第二次必须改成新的信息、阻碍、选择或后果。"
+            )
+        if "scene_state_echo" in matched:
+            requirements.append(
+                "同一身体状态、任务结果或规则信息只完整呈现一次，后续只写变化、代价或行动。"
+            )
+        return "本轮必须同时修复同一场景的现场推进和段落组织：" + "".join(requirements)
+
+    @staticmethod
     def _can_accept_style_warning(previous_issue_codes: set[str]) -> bool:
         """Accept a bounded style retry without weakening story contracts.
 
@@ -5541,6 +5586,18 @@ class GenerationEngine:
                             f"本次指定开场类型为‘{opening_label}’（{opening_mode}），首句必须直接让指定的"
                             "物件异常、外部事件、对白冲突或环境变化先发生，不能先写人物扫、走、站、抬手等动作。"
                             f"{metaphor_rule}只输出正文，不输出说明。"
+                            + third_person_generation_contract()
+                            + content_generation_contract(self.quality_profile)
+                        )
+                    elif style_only_retry and self._combined_style_retry_route(
+                        previous_issue_codes
+                    ):
+                        scene_system_prompt = (
+                            "你是中文网文的生成期结构修复编辑。必须依据本场 scene_card、已确认状态和"
+                            "上一场交接点，从头重写完整正文；保留事件、人物、因果、目标、阻碍、选择和结果，"
+                            "不得续写、照抄上一版或只替换同义词。"
+                            + self._combined_style_retry_route(previous_issue_codes)
+                            + "正文要在自然可读的前提下完成本场，不要为了满足规则塞入闲笔；只输出正文，不输出说明。"
                             + third_person_generation_contract()
                             + content_generation_contract(self.quality_profile)
                         )

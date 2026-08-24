@@ -2411,6 +2411,24 @@ def test_expression_only_scene_retry_can_get_one_fresh_style_path():
     ) is True
 
 
+def test_combined_scene_retry_repairs_cooccurring_structure_signals_together():
+    route = GenerationEngine._combined_style_retry_route(
+        {
+            "scene_metaphor_density",
+            "scene_procedural_motion",
+            "scene_subject_opening",
+        }
+    )
+
+    assert route is not None
+    assert "前两段或前240字内" in route
+    assert "段落起笔自然轮换" in route
+    assert "可观察的颜色、位置、触感、声音、动作和后果" in route
+    assert GenerationEngine._combined_style_retry_route(
+        {"scene_metaphor_density"}
+    ) is None
+
+
 def test_scene_budget_guard_rejects_candidate_that_consumes_future_scene_minimums():
     accepted_chars = 4300
     candidate_chars = 700
