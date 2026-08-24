@@ -333,7 +333,13 @@ def validate_generation_result(result: dict[str, Any], text: str) -> dict[str, A
     budget = payload.get("reader_chapter_budget") or {}
     generation_quality = payload.get("generation_quality") or {}
     try:
-        char_count = len(text)
+        # Match the canonical V7/runtime budget metric: paragraph separators
+        # and other whitespace are formatting, not正文字符. Using len(text)
+        # here made a valid 2956-character chapter look like a 3012-character
+        # overflow after it was read back from the persisted document tree.
+        from app.v7.generation.generation_engine import chinese_word_count
+
+        char_count = chinese_word_count(text)
         minimum = int(budget.get("minimum_chars") or 0)
         maximum = int(
             generation_quality.get("generation_hard_max_chars")

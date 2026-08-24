@@ -55,6 +55,16 @@ def test_generation_scope_rejects_only_the_hard_budget_overflow():
     ]
 
 
+def test_generation_scope_ignores_paragraph_formatting_in_budget_count():
+    report = RUNNER.validate_generation_result(
+        _result(),
+        "字" * 2990 + "\n\n" + "字" * 10,
+    )
+
+    assert report["passed"] is True
+    assert report["text_length"] == 3000
+
+
 def test_generation_scope_accepts_the_runtime_execution_envelope():
     report = RUNNER.validate_generation_result(
         {"status": "completed", "success": True, "raw": _result()},
