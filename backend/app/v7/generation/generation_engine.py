@@ -4079,14 +4079,20 @@ class GenerationEngine:
             current_card,
             scene_index=current_scene_number,
         )
-        # The scene's nominal maximum is the minimum completion envelope for
-        # the current Provider call.  Reserving only ``target + 64`` made a
-        # 400-character opening compete with a complete 520-character event;
-        # DeepSeek then produced a coherent 548-character scene that could
-        # not fit the scheduler's artificial 464-character remainder.  This
-        # is still bounded by the chapter ceiling and future hard minimums;
-        # it is not a fixed per-scene target.
-        current_completion_floor = current_nominal_maximum
+        current_natural_capacity = GenerationEngine._scene_allowed_max_chars(
+            current_card,
+            scene_index=current_scene_number,
+        )
+        # Reserve the full natural capacity of the current Provider call, not
+        # only its nominal scene maximum.  A 400-character opening had a
+        # nominal maximum of 520 but a bounded natural capacity of 651; the
+        # Provider's coherent 722-character candidate then had no legal room
+        # for its completion.  This remains bounded by the chapter ceiling and
+        # future hard minimums; it is not a fixed per-scene target.
+        current_completion_floor = max(
+            current_nominal_maximum,
+            current_natural_capacity,
+        )
         reserve_cap = max(0, remaining_budget - current_completion_floor)
         requested_reserve = max(future_minimum, planned_future_share)
         # If the chapter plan itself is infeasible, retain the future hard

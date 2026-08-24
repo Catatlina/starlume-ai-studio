@@ -1917,8 +1917,8 @@ def test_future_scene_reserve_is_proportional_and_not_a_fixed_scene_budget():
     )
 
     assert SCENE_FUTURE_RESERVE_RATIO == 1.0
-    assert first_reserve == 1700
-    assert second_reserve == 700
+    assert first_reserve == 1468
+    assert second_reserve == 468
     assert final_reserve == 0
     assert first_reserve > sum(
         GenerationEngine._scene_length_bounds(card, scene_index=index)[0]
