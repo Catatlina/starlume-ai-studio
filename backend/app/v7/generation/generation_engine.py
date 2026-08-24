@@ -4797,6 +4797,18 @@ class GenerationEngine:
                 "不得把本场写成独立的教学、闲聊、帮忙或日常缓冲。若有辅助人物出现，互动必须直接改变主线风险、资源、关系、位置或线索，"
                 "把解释压缩到动作和对白中，并在本场落到具体结果。"
             )
+        closing_payoff_instruction = ""
+        if scene_index == scene_count:
+            visible_result = str(payoff_contract.get("visible_result") or "").strip()
+            payoff_cost = str(payoff_contract.get("cost") or "").strip()
+            next_pressure = str(payoff_contract.get("next_pressure") or "").strip()
+            closing_payoff_instruction = (
+                "【章末兑现硬约束】这是本章最后场景。必须把本章爽点契约中的可见结果、代价和下一压力"
+                f"落到正文现场：可见结果={visible_result or '本场已经发生的结果'}；"
+                f"代价={payoff_cost or '本场已经确认的代价'}；"
+                f"下一压力={next_pressure or '由本场结果自然出现的新压力'}。"
+                "代价和下一压力不能只由旁白宣布，必须至少出现一个具体异动、痕迹、声音、物件变化、人物/旁观者反应、资源损失或规则后果；如果契约写到某个势力开始感知，正文必须给出可被人物或读者观察到的信号，但不得凭空新增契约外的组织、人物、能力或事件。章末写完结果、反馈和新压力后立即收束。"
+            )
         retry_block = f"\n【上次场景未通过，必须在本次生成中修复】\n{retry_feedback}\n" if retry_feedback else ""
         paragraph_opening_contract = (
             "【自然段首编排（硬结构，生成期执行，不要输出清单）】"
@@ -4853,6 +4865,7 @@ class GenerationEngine:
             f"{opening_mode_block}"
             f"{opening_instruction}\n"
             f"{front_loaded_progress_instruction}\n"
+            f"{closing_payoff_instruction}\n"
             f"{contract_block}\n"
             f"{causal_contract_block}"
             f"{natural_generation_contract}\n"

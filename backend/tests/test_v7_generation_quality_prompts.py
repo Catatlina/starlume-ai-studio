@@ -1579,6 +1579,29 @@ def test_scene_serial_moves_opening_pacing_constraints_into_generation_contract(
     assert "本次生成期本场可用章节剩余额度上限" in prompt
     assert "这是章节预算的生成期硬边界" in prompt
 
+    closing_prompt = engine._build_scene_generation_prompt(
+        chapter_number=1,
+        context={"context_layers": {}, "rendered_context": ""},
+        scene_plan={
+            "chapter_title": "门后的声音",
+            "payoff_contract": {
+                "visible_result": "门开启一线",
+                "cost": "封印磨损加速，影煞势力感知",
+                "next_pressure": "影煞势力开始行动",
+            },
+        },
+        scene_card={"target_words": 500, "content": "完成章末结果"},
+        scene_index=2,
+        scene_count=2,
+        previous_scene_tail="门缝里的光亮了起来。",
+        current_state={},
+        previous_handoffs=[],
+    )
+
+    assert "章末兑现硬约束" in closing_prompt
+    assert "封印磨损加速，影煞势力感知" in closing_prompt
+    assert "必须给出可被人物或读者观察到的信号" in closing_prompt
+
 
 def test_scene_prompt_uses_effective_budget_when_reader_budget_is_smaller_than_plan():
     engine = GenerationEngine.__new__(GenerationEngine)
