@@ -5125,7 +5125,14 @@ class GenerationEngine:
                             + content_generation_contract(self.quality_profile)
                         )
                     elif style_only_retry:
-                        if "scene_state_echo" in previous_issue_codes:
+                        if "structural_ai_smell" in previous_issue_codes:
+                            route = (
+                                "上一版出现结构性模板信号；本轮只改信息落点和段落组织，不改本场事实。"
+                                "禁止连续以‘他站’、‘他低’或同一两字主语起笔，禁止把每段写成同样长度的完整说明；"
+                                "让一个物件、声音、对白或现场后果直接占据段首，再把人物动作放进句中，"
+                                "让下一段由新的结果或选择接住。不要用同义词替换，也不要按固定的短长短长顺序排版。"
+                            )
+                        elif "scene_state_echo" in previous_issue_codes:
                             route = (
                                 "上一版重复解释同一身体状态、任务提示或规则结果；本次只保留第一次完整呈现，"
                                 "后续只写发生变化的症状、代价、物件后果或人物行动。系统/规则提示只保留新增字段，"
@@ -5530,6 +5537,33 @@ class GenerationEngine:
                         feedback += (
                             "\n动作回环修复硬要求：不要重复‘放回/拿起/转身/回头’来表示犹豫；"
                             "保留一次动作，另一处必须改成新的信息、阻碍、选择或可见后果，不能原地重述。"
+                        )
+                    if any(
+                        isinstance(item, dict)
+                        and item.get("code") == "structural_ai_smell"
+                        for item in issues
+                    ):
+                        structural_issue = next(
+                            (
+                                item
+                                for item in issues
+                                if isinstance(item, dict)
+                                and item.get("code") == "structural_ai_smell"
+                            ),
+                            {},
+                        )
+                        structural_evidence = structural_issue.get("evidence") or {}
+                        failed_dimensions = "、".join(
+                            str(item.get("name") or "")
+                            for item in structural_evidence.get("failed_dimensions") or []
+                            if isinstance(item, dict) and item.get("name")
+                        ) or "段落组织"
+                        feedback += (
+                            f"\n结构组织修复硬要求：上一版的{failed_dimensions}形成叠加风险；"
+                            "本次完整重写必须重新编排段落落点，不得让同一主语、同一动作或同一节拍连续占据段首。"
+                            "至少让段落自然分散从物件、声音、环境后果、对白、他人反应和动作结果起笔；"
+                            "句子长短随现场压力变化，保留一处短促反应和一处展开动作，但不要机械交替或为了指标塞闲笔。"
+                            "只保留本场事实、因果和结果，不要复制上一版段落结构。"
                         )
                     if any(
                         isinstance(item, dict)
