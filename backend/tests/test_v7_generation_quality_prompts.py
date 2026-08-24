@@ -2503,7 +2503,7 @@ def test_single_pass_overlong_candidate_uses_one_bounded_compression_pass():
 
     assert result["word_count"] == 2860
     assert len(calls) == 2
-    assert calls[1]["max_tokens"] < 2600
+    assert calls[1]["max_tokens"] <= 2600
     assert "不得新增支线或改变因果" in calls[1]["prompt"]
 
 

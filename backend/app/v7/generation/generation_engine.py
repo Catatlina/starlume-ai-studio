@@ -94,7 +94,7 @@ logger = logging.getLogger(__name__)
 
 CHAPTER_STATE_TYPE = "chapter"
 SCENE_SERIAL_GENERATION_VERSION = "2.45.0"
-CHAPTER_SINGLE_PASS_GENERATION_VERSION = "2.48.0"
+CHAPTER_SINGLE_PASS_GENERATION_VERSION = "2.49.0"
 # Keep the canonical writer loop intentionally small.  Candidate fan-out and
 # local prose surgery belong to explicit/manual tooling, not the production
 # chapter path; nested retries made the writer see too many competing rules.
@@ -7665,10 +7665,16 @@ class GenerationEngine:
                     )
                 else:
                     calibrated_tokens = int(hard_max_chars * 0.80)
-                token_limit = max(1800, min(3000, calibrated_tokens))
+                # The ratio estimates the compact size, but the compressed
+                # draft still needs enough tokens to finish its consequence
+                # and closing hook.  The observed 2400-token pass ended at
+                # 2794 chars with finish_reason=length, so retain a bounded
+                # 2600-token completion floor instead of accepting a cut-off
+                # chapter.
+                token_limit = max(2600, min(3000, calibrated_tokens + 200))
                 retry_feedback = (
                     "\n\n【整章预算收束要求】上一版完整但超出内部章节上限。"
-                    f"本次从头重写并严格收束在 {minimum_chars}-{hard_max_chars} 字；"
+                    f"本次压缩目标为 2200-{hard_max_chars} 字，并严格收束在 {minimum_chars}-{hard_max_chars} 字；"
                     "以下上一版正文已经完成事件，不得新增支线或改变因果；以它为压缩底稿，"
                     "保留目标、阻碍、主动选择、爽点反馈、关键线索和章末钩子，"
                     "优先合并重复反应、重复环境、百科解释和同一事件的二次总结，"
