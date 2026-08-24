@@ -3,6 +3,7 @@ from app.services.chapter_payoff import (
     evaluate_payoff_schedule,
     normalize_payoff_contract,
     repair_payoff_beat_structure,
+    score_payoff_contract,
     validate_payoff_beat_structure,
     validate_payoff_contract,
     validate_payoff_evidence,
@@ -103,6 +104,26 @@ def test_payoff_evidence_must_be_locatable_in_actual_text():
     assert rewritten_result["passed"] is True
     assert rewritten_result["checked"][0]["match_mode"] == "fuzzy_contiguous"
     assert rewritten_result["checked"][0]["anchor"] in rewritten
+
+
+def test_payoff_score_accepts_natural_observable_result_paraphrase():
+    profile = select_quality_profile(genre="玄幻", subgenre="传统升级流")
+    contract = build_payoff_contract(
+        {
+            **_contract(),
+            "visible_result": "发现纸条，得知‘借期已至’",
+            "payoff_type": "reveal",
+        },
+        chapter_number=1,
+        profile=profile,
+    )
+    scored = score_payoff_contract(
+        contract,
+        profile=profile,
+        text="他余光瞥见门缝下多了一样东西。一张纸。展开后，纸上只写着：‘借期已至’。",
+    )
+    assert scored["evidence"]["visible_result"] is True
+    assert scored["dimensions"]["result_visibility"] == 100
 
 
 def test_provider_facing_chinese_payoff_labels_map_to_canonical_types():

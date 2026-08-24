@@ -1543,7 +1543,9 @@ class SceneDirector:
         payoff_generation_floor = (
             f"【生成前爽点硬约束】本章属于前{early_payoff_limit}章，"
             f"爽点契约和 beats 必须实际执行不低于 {early_payoff_floor} 档的可见兑现；"
-            "不能只把 payoff_intensity 字段改成高档，必须在爆发、反馈和余波中写出具体动作与后果。"
+            "不能只把 payoff_intensity 字段改成高档，必须在爆发、反馈和余波中写出具体动作与后果；"
+            "如果本章是信息揭示，信息落地后必须紧接一个来自既有事实的可观察威胁、损失、异动、追查信号或被迫选择，"
+            "不能以‘意识到异常’或‘决定调查’作为唯一兑现。"
             if early_payoff_limit and chapter_number <= early_payoff_limit
             else ""
         )
@@ -4876,6 +4878,13 @@ class GenerationEngine:
                 "异常不能只作为奇观或氛围，前420字内必须让人物感知一个具体威胁、禁忌、代价、"
                 "被发现风险或会改变选择的后果，并通过动作、对白、物件或身体反应落地。"
             )
+            if chapter_number <= int((self.quality_profile or {}).get("payoff_policy", {}).get("early_chapters_need_payoff") or 0):
+                opening_instruction += (
+                    "如果本章的第一次兑现是揭示或发现，不能停在‘看见了线索、意识到异常、决定调查’；"
+                    "线索出现后必须在本场或紧接下一场触发一个已有事实中的具体现场反馈，"
+                    "例如门内再次发声、物件状态改变、身体/资源付出、被人接近、位置暴露或路线被迫改变；"
+                    "只能使用场景卡和已确认事实，不得凭空新增角色、能力、势力或奖励。"
+                )
         else:
             opening_instruction = (
                 "这是本章后续场景，第一段必须接住上一场最后的动作、视线、声音、地点或选择；"
@@ -4909,6 +4918,11 @@ class GenerationEngine:
                 f"下一压力={next_pressure or '由本场结果自然出现的新压力'}。"
                 "代价和下一压力不能只由旁白宣布，必须至少出现一个具体异动、痕迹、声音、物件变化、人物/旁观者反应、资源损失或规则后果；如果契约写到某个势力开始感知，正文必须给出可被人物或读者观察到的信号，但不得凭空新增契约外的组织、人物、能力或事件。章末写完结果、反馈和新压力后立即收束。"
             )
+            if chapter_number <= int((self.quality_profile or {}).get("payoff_policy", {}).get("early_chapters_need_payoff") or 0):
+                closing_payoff_instruction += (
+                    "首章/前期揭示不能只以‘他意识到问题’、‘他决定调查’或‘留下悬念’收束；"
+                    "在信息揭示之后必须让读者看到一个正在发生的具体威胁或后果，并让主角因此作出下一步选择。"
+                )
         retry_block = f"\n【上次场景未通过，必须在本次生成中修复】\n{retry_feedback}\n" if retry_feedback else ""
         paragraph_opening_contract = (
             "【自然段首编排（硬结构，生成期执行，不要输出清单）】"

@@ -153,6 +153,39 @@ def _anchor_key(value: Any) -> str:
     return re.sub(r"[\W_]+", "", str(value or ""), flags=re.UNICODE)
 
 
+_RESULT_ACTION_PREFIXES = (
+    "发现", "得知", "看到", "看见", "注意到", "拿到", "获得", "找到", "确认",
+    "意识到", "决定", "开始", "出现", "发生", "变成", "成为", "打开", "推开",
+    "听见", "听到", "收到", "拿出", "交出", "得到", "失去", "暴露", "引来",
+    "触发", "开启", "揭开", "揭示", "证明",
+)
+
+
+def _observable_result_terms(anchor: str) -> list[str]:
+    """Extract conservative observable terms from a prose payoff anchor.
+
+    A contract is planning language, while the chapter is natural prose. An
+    anchor such as ``发现纸条，得知“借期已至”`` should remain verifiable when
+    the chapter says ``瞥见门缝下多了一张纸`` and quotes ``借期已至``. This
+    helper removes only common action prefixes and requires every remaining
+    meaningful clause to be present; it is not a bag-of-words score.
+    """
+    raw_parts = re.split(r"[，。；：、,;:!?！？\s]+", str(anchor or ""))
+    terms: list[str] = []
+    for part in raw_parts:
+        term = _anchor_key(part)
+        if not term:
+            continue
+        for prefix in _RESULT_ACTION_PREFIXES:
+            prefix_key = _anchor_key(prefix)
+            if term.startswith(prefix_key) and len(term) > len(prefix_key):
+                term = term[len(prefix_key):]
+                break
+        if len(term) >= 2 and term not in terms:
+            terms.append(term)
+    return terms
+
+
 def _anchor_key_with_spans(value: Any) -> tuple[str, list[tuple[int, int]]]:
     """Return the normalized anchor key and its source-character spans.
 
@@ -854,11 +887,18 @@ def score_payoff_contract(
     result_anchor = str(contract.get("visible_result") or "").strip()
     feedback = str(contract.get("payoff_feedback") or "").strip()
     next_pressure = str(contract.get("next_pressure") or "").strip()
+    result_key = _anchor_key(result_anchor)
+    source_key = _anchor_key(source_text)
+    result_terms = _observable_result_terms(result_anchor)
     result_visible = bool(result_anchor) and (
         result_anchor in source_text
         or (
-            len(_anchor_key(result_anchor)) >= 8
-            and _anchor_key(result_anchor) in _anchor_key(source_text)
+            len(result_key) >= 8
+            and result_key in source_key
+        )
+        or (
+            len(result_terms) >= 2
+            and all(term in source_key for term in result_terms)
         )
     )
     variety = validate_payoff_variety(
