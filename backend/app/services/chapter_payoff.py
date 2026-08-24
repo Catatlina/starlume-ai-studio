@@ -160,6 +160,10 @@ _RESULT_ACTION_PREFIXES = (
     "触发", "开启", "揭开", "揭示", "证明",
 )
 
+_OBSERVABLE_RESULT_ALIASES = {
+    "纸条": ("纸条", "一张纸", "纸上"),
+}
+
 
 def _observable_result_terms(anchor: str) -> list[str]:
     """Extract conservative observable terms from a prose payoff anchor.
@@ -898,7 +902,10 @@ def score_payoff_contract(
         )
         or (
             len(result_terms) >= 2
-            and all(term in source_key for term in result_terms)
+            and all(
+                any(alias in source_key for alias in _OBSERVABLE_RESULT_ALIASES.get(term, (term,)))
+                for term in result_terms
+            )
         )
     )
     variety = validate_payoff_variety(

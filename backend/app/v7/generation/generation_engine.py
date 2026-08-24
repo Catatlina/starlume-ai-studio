@@ -4860,6 +4860,7 @@ class GenerationEngine:
                 "并让人物行为或对白对这个反馈作出反应。\n"
             )
         opening_instruction = ""
+        quality_profile_for_prompt = getattr(self, "quality_profile", None) or {}
         if scene_index == 1:
             if previous_scene_tail or (context.get("context_layers") or {}).get("previous_tail"):
                 opening_instruction = (
@@ -4878,7 +4879,7 @@ class GenerationEngine:
                 "异常不能只作为奇观或氛围，前420字内必须让人物感知一个具体威胁、禁忌、代价、"
                 "被发现风险或会改变选择的后果，并通过动作、对白、物件或身体反应落地。"
             )
-            if chapter_number <= int((self.quality_profile or {}).get("payoff_policy", {}).get("early_chapters_need_payoff") or 0):
+            if chapter_number <= int(quality_profile_for_prompt.get("payoff_policy", {}).get("early_chapters_need_payoff") or 0):
                 opening_instruction += (
                     "如果本章的第一次兑现是揭示或发现，不能停在‘看见了线索、意识到异常、决定调查’；"
                     "线索出现后必须在本场或紧接下一场触发一个已有事实中的具体现场反馈，"
@@ -4918,7 +4919,7 @@ class GenerationEngine:
                 f"下一压力={next_pressure or '由本场结果自然出现的新压力'}。"
                 "代价和下一压力不能只由旁白宣布，必须至少出现一个具体异动、痕迹、声音、物件变化、人物/旁观者反应、资源损失或规则后果；如果契约写到某个势力开始感知，正文必须给出可被人物或读者观察到的信号，但不得凭空新增契约外的组织、人物、能力或事件。章末写完结果、反馈和新压力后立即收束。"
             )
-            if chapter_number <= int((self.quality_profile or {}).get("payoff_policy", {}).get("early_chapters_need_payoff") or 0):
+            if chapter_number <= int(quality_profile_for_prompt.get("payoff_policy", {}).get("early_chapters_need_payoff") or 0):
                 closing_payoff_instruction += (
                     "首章/前期揭示不能只以‘他意识到问题’、‘他决定调查’或‘留下悬念’收束；"
                     "在信息揭示之后必须让读者看到一个正在发生的具体威胁或后果，并让主角因此作出下一步选择。"
