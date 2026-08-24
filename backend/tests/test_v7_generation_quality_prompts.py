@@ -411,6 +411,20 @@ def test_object_extinguishing_before_later_action_is_not_misclassified():
     assert result["observed_mode"] == "object"
 
 
+def test_object_opening_recognises_door_hardware_change():
+    text = "门轴先响了一声。苏长庚站在第七层门前，门缝里的青白光线往外漫。"
+
+    result = inspect_opening(
+        text,
+        requested_mode="object",
+        chapter_number=2,
+        recent_modes=["action"],
+    )
+
+    assert result["passed"] is True
+    assert result["observed_mode"] == "object"
+
+
 def test_later_action_does_not_hide_an_unfulfilled_object_opening():
     text = "清晨，藏经阁还没亮透，苏长庚的帚尖已经落在第七层台阶上。门缝里的光随后才亮起来。"
 
