@@ -2035,15 +2035,6 @@ def test_scene_length_bounds_make_pacing_budget_a_generation_contract():
         {"target_words": 600},
         scene_index=3,
     )
-
-
-def test_generation_keeps_post_process_margin_inside_reader_maximum():
-    assert SCENE_POST_PROCESS_SAFETY_MARGIN_CHARS == 32
-    reader_max = 3000
-    generation_sequence_max = reader_max - SCENE_POST_PROCESS_SAFETY_MARGIN_CHARS
-
-    assert generation_sequence_max == 2968
-    assert generation_sequence_max < reader_max
     assert minimum == 270
     assert maximum == int(600 * SCENE_TARGET_MAX_RATIO)
     assert maximum < 600 * 1.35
@@ -2054,6 +2045,15 @@ def test_generation_keeps_post_process_margin_inside_reader_maximum():
         int(maximum * SCENE_NATURAL_LENGTH_TOLERANCE)
         + SCENE_NATURAL_LENGTH_TOLERANCE_CHARS
     )
+
+
+def test_generation_keeps_post_process_margin_inside_reader_maximum():
+    assert SCENE_POST_PROCESS_SAFETY_MARGIN_CHARS == 32
+    reader_max = 3000
+    generation_sequence_max = reader_max - SCENE_POST_PROCESS_SAFETY_MARGIN_CHARS
+
+    assert generation_sequence_max == 2968
+    assert generation_sequence_max < reader_max
 
 
 def test_future_scene_reserve_keeps_complete_event_capacity_available():
