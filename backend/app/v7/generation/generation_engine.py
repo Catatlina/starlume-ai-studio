@@ -107,8 +107,15 @@ SCENE_STYLE_RETRY_MAX_ATTEMPTS = 3
 # narrower than style/truncation retries: it never relaxes the 2200-3000 reader
 # budget and never rescues a materially oversized scene.
 SCENE_BUDGET_RETRY_MAX_ATTEMPTS = 3
-SCENE_BUDGET_RETRY_RATIO = 0.62
+# A budget retry must leave room for a complete scene.  The chapter ceiling
+# and the future-scene minimums are already hard constraints; shrinking the
+# Provider envelope to 62% of the remaining space made short final scenes
+# fail their own minimum-length contract.  Keep a bounded compression signal,
+# but never starve completion headroom.
+SCENE_BUDGET_RETRY_RATIO = 0.82
 SCENE_BUDGET_RETRY_MAX_OVERFLOW_CHARS = 480
+SCENE_BUDGET_RETRY_MIN_HEADROOM_CHARS = 180
+SCENE_BUDGET_RETRY_COMPLETION_MARGIN = 1.05
 SCENE_HANDOFF_SCHEMA = "scene-handoff-v1"
 # Platform limits are not reader targets.  The active quality profile now
 # derives a reader-facing chapter budget before planning and prose generation.
@@ -3797,6 +3804,24 @@ class GenerationEngine:
         )
 
     @staticmethod
+    def _budget_retry_max_chars(
+        *,
+        remaining_scene_budget: int,
+        minimum_scene_chars: int,
+        previous_candidate_chars: int,
+    ) -> int:
+        """Keep a budget repair complete without relaxing the chapter ceiling."""
+        requested_envelope = max(
+            minimum_scene_chars + SCENE_BUDGET_RETRY_MIN_HEADROOM_CHARS,
+            int(remaining_scene_budget * SCENE_BUDGET_RETRY_RATIO),
+            int(previous_candidate_chars * 0.80),
+        )
+        # The caller has already reserved future-scene minimums.  Capping here
+        # preserves that reservation while retaining enough space above the
+        # current scene minimum for a natural, complete rewrite.
+        return min(remaining_scene_budget, requested_envelope)
+
+    @staticmethod
     def _is_style_only_retry(previous_issue_codes: set[str]) -> bool:
         """Return whether a retry can be regenerated from contracts alone."""
         return bool(previous_issue_codes) and previous_issue_codes.issubset({
@@ -4900,7 +4925,14 @@ class GenerationEngine:
                     else SCENE_DEEPSEEK_OVERLONG_REPAIR_MARGIN
                 )
                 if budget_retry:
-                    repair_margin = 0.72 if provider != "openai" else 0.76
+                    # A shorter character envelope is sufficient compression;
+                    # token headroom must still be large enough to finish the
+                    # scene and its handoff instead of producing a short stub.
+                    repair_margin = (
+                        SCENE_BUDGET_RETRY_COMPLETION_MARGIN
+                        if provider != "openai"
+                        else max(SCENE_BUDGET_RETRY_COMPLETION_MARGIN, 1.10)
+                    )
                 elif attempt == 0:
                     repair_margin = None
                 elif compression_mode:
@@ -5011,14 +5043,15 @@ class GenerationEngine:
                         int(attempt_max_scene_chars * 0.82),
                     )
                 if budget_retry:
-                    # The previous complete candidate was only a few
-                    # characters over the chapter ceiling. Give the Provider
-                    # a materially smaller envelope and require a complete
-                    # event, rather than slicing the accepted prose after the
-                    # fact or widening the reader budget.
-                    attempt_max_scene_chars = max(
-                        min_scene_chars,
-                        int(remaining_scene_budget * SCENE_BUDGET_RETRY_RATIO),
+                    # The previous complete candidate was only a bounded
+                    # amount over the chapter ceiling. Give the Provider a
+                    # smaller envelope that still has completion headroom and
+                    # require a complete event; never slice prose afterwards
+                    # or widen the reader budget.
+                    attempt_max_scene_chars = self._budget_retry_max_chars(
+                        remaining_scene_budget=remaining_scene_budget,
+                        minimum_scene_chars=min_scene_chars,
+                        previous_candidate_chars=chinese_word_count(candidate),
                     )
                 scene_token_limit = self._scene_generation_max_tokens(
                     card,
@@ -5155,7 +5188,8 @@ class GenerationEngine:
                         scene_system_prompt = (
                             "本次是章节预算收束重写：上一版已超出本章剩余额度，必须从头完整重写，"
                             "保留本场目标、阻碍、选择和结果，删除重复段落、重复反应、类比和解释，"
-                            "在本次给定的较小字数额度内收束；不得续写、照抄或把超出部分留到下一场。"
+                            f"本场正文必须至少 {min_scene_chars} 字、最多 {attempt_max_scene_chars} 字，"
+                            "在这个范围内完成并收束；不得续写、照抄或把超出部分留到下一场。"
                             + scene_system_prompt
                         )
                 # One writer call per attempt.  The previous implementation
@@ -5544,45 +5578,42 @@ class GenerationEngine:
                             )
                     attempt += 1
                     continue
+                issue_messages: list[str] = []
+                for item in issues:
+                    code = item.get("code") if isinstance(item, dict) else "unknown"
+                    if code == "scene_overlong":
+                        issue_messages.append(
+                            f"{code}[{item.get('word_count')}字>{item.get('max_scene_chars')}字]"
+                        )
+                    elif code == "scene_chapter_budget_overrun":
+                        issue_messages.append(
+                            f"{code}[accepted={accepted_chars},candidate={candidate_word_count},"
+                            f"future_min={future_minimum_chars},chapter_max={chapter_max_chars}]"
+                        )
+                    elif code == "scene_reader_budget_overrun":
+                        issue_messages.append(
+                            f"{code}[accepted={accepted_chars},candidate={candidate_word_count},"
+                            f"future_target={future_target_chars},planning_max={planning_max_chars}]"
+                        )
+                    elif code == "scene_provider_truncated":
+                        evidence = item.get("evidence") if isinstance(item, dict) else {}
+                        issue_messages.append(
+                            f"{code}[token_limit={scene_token_limit},max_chars={attempt_max_scene_chars},"
+                            f"attempt={evidence.get('attempt', '?')},candidate={evidence.get('candidate_chars', '?')}]"
+                        )
+                    elif code == "scene_too_short":
+                        issue_messages.append(
+                            f"{code}[candidate={candidate_word_count},minimum={min_scene_chars}]"
+                        )
+                    elif isinstance(item, dict) and item.get("evidence"):
+                        issue_messages.append(
+                            f"{code}[evidence={json.dumps(item.get('evidence'), ensure_ascii=False)}]"
+                        )
+                    else:
+                        issue_messages.append(str(code))
                 raise AIGatewayError(
                     f"scene {index} failed generation contract after bounded retry: "
-                    + "; ".join(
-                        (
-                            f"{item.get('code')}[{item.get('word_count')}字>"
-                            f"{item.get('max_scene_chars')}字]"
-                        )
-                        if isinstance(item, dict) and item.get("code") == "scene_overlong"
-                        else (
-                            (
-                                f"{item.get('code')}[accepted={accepted_chars},"
-                                f"candidate={candidate_word_count},future_min={future_minimum_chars},"
-                                f"chapter_max={chapter_max_chars}]"
-                            )
-                            if isinstance(item, dict) and item.get("code") == "scene_chapter_budget_overrun"
-                            else (
-                                (
-                                    f"{item.get('code')}[accepted={accepted_chars},"
-                                    f"candidate={candidate_word_count},future_target={future_target_chars},"
-                                    f"planning_max={planning_max_chars}]"
-                                )
-                                if isinstance(item, dict) and item.get("code") == "scene_reader_budget_overrun"
-                                else (
-                                    f"{item.get('code')}[token_limit={scene_token_limit},"
-                                    f"max_chars={attempt_max_scene_chars},"
-                                    f"attempt={item.get('evidence', {}).get('attempt') if isinstance(item.get('evidence'), dict) else '?'},"
-                                    f"candidate={item.get('evidence', {}).get('candidate_chars') if isinstance(item.get('evidence'), dict) else '?'}]"
-                                    if isinstance(item, dict) and item.get("code") == "scene_provider_truncated"
-                                    else (
-                                        f"{item.get('code')}[evidence="
-                                        f"{json.dumps(item.get('evidence'), ensure_ascii=False)}]"
-                                        if item.get("evidence")
-                                        else str(item.get("code"))
-                                    )
-                                )
-                            )
-                        )
-                        for item in issues
-                    )
+                    + "; ".join(issue_messages)
                 )
 
             handoff, handoff_usage = await self._extract_scene_handoff(

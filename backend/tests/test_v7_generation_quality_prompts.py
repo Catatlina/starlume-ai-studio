@@ -2031,6 +2031,27 @@ def test_bounded_budget_retry_covers_mixed_scene_overrun_once():
     ) is False
 
 
+def test_budget_retry_envelope_preserves_scene_minimum_and_chapter_ceiling():
+    # A tight final-scene remainder must not be reduced below the amount
+    # needed for a complete scene, even when the previous candidate was much
+    # larger.  The chapter ceiling still wins over the completion headroom.
+    assert GenerationEngine._budget_retry_max_chars(
+        remaining_scene_budget=520,
+        minimum_scene_chars=300,
+        previous_candidate_chars=1100,
+    ) == 520
+    assert GenerationEngine._budget_retry_max_chars(
+        remaining_scene_budget=1000,
+        minimum_scene_chars=300,
+        previous_candidate_chars=1100,
+    ) == 880
+    assert GenerationEngine._budget_retry_max_chars(
+        remaining_scene_budget=350,
+        minimum_scene_chars=300,
+        previous_candidate_chars=1100,
+    ) == 350
+
+
 def test_expression_only_scene_retry_can_get_one_fresh_style_path():
     assert GenerationEngine._can_extend_style_retry(
         previous_issue_codes={"scene_explanatory_narration", "scene_metaphor_density"},
