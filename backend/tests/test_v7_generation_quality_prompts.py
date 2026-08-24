@@ -342,6 +342,20 @@ def test_natural_action_opening_with_a_pause_is_classified_as_action():
     assert result["passed"] is True
 
 
+def test_external_event_opening_accepts_natural_clock_sound_wording():
+    text = "窗外传来第三声钟响时，苏长庚正把气往丹田里压。"
+
+    result = inspect_opening(
+        text,
+        requested_mode="external_event",
+        chapter_number=3,
+        recent_modes=["action", "object"],
+    )
+
+    assert result["passed"] is True
+    assert result["observed_mode"] == "external_event"
+
+
 def test_action_opening_allows_short_scene_lead_before_early_visible_action():
     text = (
         "午后的日头正毒，外门广场的青石砖被晒得发烫。"
