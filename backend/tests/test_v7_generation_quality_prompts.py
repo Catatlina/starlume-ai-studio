@@ -21,6 +21,8 @@ from app.v7.generation.generation_engine import (
     SCENE_DEEPSEEK_OVERLONG_REPAIR_MARGIN,
     SCENE_DEEPSEEK_FINAL_TRUNCATION_REPAIR_MARGIN,
     SCENE_BUDGET_RETRY_COMPLETION_MARGIN,
+    SCENE_BUDGET_RETRY_SMALL_SCENE_COMPLETION_MARGIN,
+    SCENE_BUDGET_RETRY_SMALL_SCENE_MAX_CHARS,
     SCENE_MIXED_TRUNCATION_OVERLONG_REPAIR_MARGIN,
     SCENE_NATURAL_LENGTH_TOLERANCE,
     SCENE_NATURAL_LENGTH_TOLERANCE_CHARS,
@@ -2095,6 +2097,8 @@ def test_budget_retry_uses_the_calibrated_deepseek_completion_margin():
     # 1.05 allowed the real Provider to overshoot a 3000-char chapter after a
     # bounded retry; 0.86 is the measured complete-scene calibration.
     assert SCENE_BUDGET_RETRY_COMPLETION_MARGIN == 0.86
+    assert SCENE_BUDGET_RETRY_SMALL_SCENE_MAX_CHARS == 800
+    assert SCENE_BUDGET_RETRY_SMALL_SCENE_COMPLETION_MARGIN == 1.05
 
 
 def test_expression_only_scene_retry_can_get_one_fresh_style_path():

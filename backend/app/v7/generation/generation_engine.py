@@ -116,6 +116,12 @@ SCENE_BUDGET_RETRY_RATIO = 0.82
 SCENE_BUDGET_RETRY_MAX_OVERFLOW_CHARS = 480
 SCENE_BUDGET_RETRY_MIN_HEADROOM_CHARS = 180
 SCENE_BUDGET_RETRY_COMPLETION_MARGIN = 0.86
+# A small final scene can be complete at the character level but still hit a
+# token ceiling before its handoff is written.  Give only this narrow envelope
+# extra completion room; larger budget repairs retain the 0.86 calibration that
+# prevents DeepSeek from overshooting the chapter ceiling.
+SCENE_BUDGET_RETRY_SMALL_SCENE_MAX_CHARS = 800
+SCENE_BUDGET_RETRY_SMALL_SCENE_COMPLETION_MARGIN = 1.05
 SCENE_BUDGET_RETRY_SAFETY_MARGIN_CHARS = 48
 SCENE_HANDOFF_SCHEMA = "scene-handoff-v1"
 # Platform limits are not reader targets.  The active quality profile now
@@ -5059,6 +5065,12 @@ class GenerationEngine:
                         minimum_scene_chars=min_scene_chars,
                         previous_candidate_chars=chinese_word_count(candidate),
                     )
+                    if attempt_max_scene_chars <= SCENE_BUDGET_RETRY_SMALL_SCENE_MAX_CHARS:
+                        repair_margin = (
+                            SCENE_BUDGET_RETRY_SMALL_SCENE_COMPLETION_MARGIN
+                            if provider != "openai"
+                            else max(SCENE_BUDGET_RETRY_SMALL_SCENE_COMPLETION_MARGIN, 1.10)
+                        )
                 scene_token_limit = self._scene_generation_max_tokens(
                     card,
                     scene_index=index,
