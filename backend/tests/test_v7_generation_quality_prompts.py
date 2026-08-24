@@ -2158,7 +2158,7 @@ def test_bounded_budget_retry_covers_mixed_scene_overrun_once():
         previous_issue_codes={"scene_chapter_budget_overrun"},
         attempt=1,
         max_attempts=2,
-        projected_chars=3481,
+        projected_chars=4201,
         chapter_max_chars=3000,
         future_minimum_chars=0,
         future_target_chars=0,
