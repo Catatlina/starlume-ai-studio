@@ -1983,8 +1983,8 @@ def test_scene_truncation_can_get_one_final_attempt_but_other_repairs_cannot():
     ) is False
 
 
-def test_near_boundary_final_scene_can_get_one_tight_budget_retry_only():
-    assert GenerationEngine._can_extend_final_budget_retry(
+def test_bounded_budget_retry_covers_mixed_scene_overrun_once():
+    assert GenerationEngine._can_extend_budget_retry(
         previous_issue_codes={"scene_chapter_budget_overrun"},
         attempt=1,
         max_attempts=2,
@@ -1993,7 +1993,7 @@ def test_near_boundary_final_scene_can_get_one_tight_budget_retry_only():
         future_minimum_chars=0,
         future_target_chars=0,
     ) is True
-    assert GenerationEngine._can_extend_final_budget_retry(
+    assert GenerationEngine._can_extend_budget_retry(
         previous_issue_codes={"scene_chapter_budget_overrun"},
         attempt=1,
         max_attempts=2,
@@ -2002,7 +2002,7 @@ def test_near_boundary_final_scene_can_get_one_tight_budget_retry_only():
         future_minimum_chars=0,
         future_target_chars=0,
     ) is True
-    assert GenerationEngine._can_extend_final_budget_retry(
+    assert GenerationEngine._can_extend_budget_retry(
         previous_issue_codes={"scene_chapter_budget_overrun"},
         attempt=1,
         max_attempts=2,
@@ -2011,13 +2011,22 @@ def test_near_boundary_final_scene_can_get_one_tight_budget_retry_only():
         future_minimum_chars=0,
         future_target_chars=0,
     ) is False
-    assert GenerationEngine._can_extend_final_budget_retry(
+    assert GenerationEngine._can_extend_budget_retry(
         previous_issue_codes={"scene_chapter_budget_overrun"},
         attempt=1,
         max_attempts=2,
         projected_chars=3031,
         chapter_max_chars=3000,
         future_minimum_chars=120,
+        future_target_chars=0,
+    ) is True
+    assert GenerationEngine._can_extend_budget_retry(
+        previous_issue_codes={"scene_chapter_budget_overrun", "scene_provider_truncated"},
+        attempt=1,
+        max_attempts=2,
+        projected_chars=3031,
+        chapter_max_chars=3000,
+        future_minimum_chars=0,
         future_target_chars=0,
     ) is False
 
