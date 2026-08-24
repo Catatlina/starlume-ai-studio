@@ -725,7 +725,7 @@ def test_generation_naturalness_keeps_long_scene_boundary_density_as_warning():
         "门闩像被人碰过。",
         "影子像贴在墙根。",
     ])
-    report = inspect_generation_naturalness(comparisons + "门锁没有再响。" * 110)
+    report = inspect_generation_naturalness(comparisons + "门锁没有再响。" * 220)
 
     assert report["narrative_chars"] >= 1600
     assert any(item["code"] == "scene_metaphor_density_warning" for item in report["warnings"])
