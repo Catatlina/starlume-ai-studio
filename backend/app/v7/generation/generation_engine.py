@@ -101,6 +101,12 @@ SCENE_SERIAL_MAX_ATTEMPTS = 2
 # extension.  This keeps the bounded loop from turning into open-ended
 # polishing while giving the real Provider one fresh style route.
 SCENE_STYLE_RETRY_MAX_ATTEMPTS = 3
+# A complete final scene that misses the chapter ceiling by only a few
+# characters deserves one final, smaller generation path. This is deliberately
+# narrower than style/truncation retries: it never relaxes the 2200-3000 reader
+# budget and never rescues a materially oversized scene.
+SCENE_FINAL_BUDGET_RETRY_MAX_ATTEMPTS = 3
+SCENE_FINAL_BUDGET_RETRY_RATIO = 0.62
 SCENE_HANDOFF_SCHEMA = "scene-handoff-v1"
 # Platform limits are not reader targets.  The active quality profile now
 # derives a reader-facing chapter budget before planning and prose generation.
@@ -3750,6 +3756,28 @@ class GenerationEngine:
         )
 
     @staticmethod
+    def _can_extend_final_budget_retry(
+        *,
+        previous_issue_codes: set[str],
+        attempt: int,
+        max_attempts: int,
+        projected_chars: int,
+        chapter_max_chars: int,
+        future_minimum_chars: int,
+        future_target_chars: int,
+    ) -> bool:
+        """Allow one tight rewrite for a near-boundary final scene only."""
+        overflow = projected_chars - chapter_max_chars
+        return bool(
+            max_attempts == SCENE_SERIAL_MAX_ATTEMPTS
+            and attempt == SCENE_SERIAL_MAX_ATTEMPTS - 1
+            and previous_issue_codes == {"scene_chapter_budget_overrun"}
+            and future_minimum_chars == 0
+            and future_target_chars == 0
+            and 0 < overflow <= SCENE_NATURAL_LENGTH_TOLERANCE_CHARS
+        )
+
+    @staticmethod
     def _is_style_only_retry(previous_issue_codes: set[str]) -> bool:
         """Return whether a retry can be regenerated from contracts alone."""
         return bool(previous_issue_codes) and previous_issue_codes.issubset({
@@ -4842,12 +4870,20 @@ class GenerationEngine:
                     and previous_issue_codes
                     and self._is_style_only_retry(previous_issue_codes)
                 )
+                final_budget_retry = bool(
+                    attempt >= SCENE_SERIAL_MAX_ATTEMPTS
+                    and previous_issue_codes == {"scene_chapter_budget_overrun"}
+                    and future_minimum_chars == 0
+                    and future_target_chars == 0
+                )
                 overlong_margin = (
                     SCENE_OPENAI_OVERLONG_REPAIR_MARGIN
                     if provider == "openai"
                     else SCENE_DEEPSEEK_OVERLONG_REPAIR_MARGIN
                 )
-                if attempt == 0:
+                if final_budget_retry:
+                    repair_margin = 0.72 if provider != "openai" else 0.76
+                elif attempt == 0:
                     repair_margin = None
                 elif compression_mode:
                     if truncation_seen:
@@ -4955,6 +4991,16 @@ class GenerationEngine:
                     attempt_max_scene_chars = max(
                         min_scene_chars,
                         int(attempt_max_scene_chars * 0.82),
+                    )
+                if final_budget_retry:
+                    # The previous complete candidate was only a few
+                    # characters over the chapter ceiling. Give the Provider
+                    # a materially smaller envelope and require a complete
+                    # event, rather than slicing the accepted prose after the
+                    # fact or widening the reader budget.
+                    attempt_max_scene_chars = max(
+                        min_scene_chars,
+                        int(remaining_scene_budget * SCENE_FINAL_BUDGET_RETRY_RATIO),
                     )
                 scene_token_limit = self._scene_generation_max_tokens(
                     card,
@@ -5316,6 +5362,17 @@ class GenerationEngine:
                     max_attempts=max_scene_attempts,
                 ):
                     max_scene_attempts += 1
+                    can_retry = True
+                elif self._can_extend_final_budget_retry(
+                    previous_issue_codes=previous_issue_codes,
+                    attempt=attempt,
+                    max_attempts=max_scene_attempts,
+                    projected_chars=projected_chapter_chars,
+                    chapter_max_chars=chapter_max_chars,
+                    future_minimum_chars=future_minimum_chars,
+                    future_target_chars=future_target_chars,
+                ):
+                    max_scene_attempts = SCENE_FINAL_BUDGET_RETRY_MAX_ATTEMPTS
                     can_retry = True
                 elif self._can_extend_style_retry(
                     previous_issue_codes=previous_issue_codes,
