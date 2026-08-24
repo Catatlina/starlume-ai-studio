@@ -3921,6 +3921,8 @@ class GenerationEngine:
             "scene_state_echo",
             "scene_procedural_motion",
             "scene_subject_opening",
+            "scene_duplicate_paragraph",
+            "scene_semantic_duplicate",
             "scene_payoff_cost_missing",
             "scene_opening_contract",
         })
@@ -3940,6 +3942,8 @@ class GenerationEngine:
             "scene_subject_opening",
             "scene_repeated_action_loop",
             "scene_state_echo",
+            "scene_duplicate_paragraph",
+            "scene_semantic_duplicate",
         }
         matched = previous_issue_codes.intersection(structural_codes)
         if len(matched) < 2:
@@ -3967,6 +3971,16 @@ class GenerationEngine:
         if "scene_state_echo" in matched:
             requirements.append(
                 "同一身体状态、任务结果或规则信息只完整呈现一次，后续只写变化、代价或行动。"
+            )
+        if "scene_duplicate_paragraph" in matched:
+            requirements.append(
+                "已写正文中出现过的完整段落只能保留一次；不要把同一段交代换几个词再写，"
+                "必须让当前段落承担新的信息、阻碍、选择或后果。"
+            )
+        if "scene_semantic_duplicate" in matched:
+            requirements.append(
+                "从上一场已经完成的状态直接推进，不得重演已经完成的对话、求助、解释或动作链；"
+                "当前场必须出现新的阻碍、主动选择和结果，不能只更换人名和动词。"
             )
         return "本轮必须同时修复同一场景的现场推进和段落组织：" + "".join(requirements)
 
@@ -4041,6 +4055,14 @@ class GenerationEngine:
                 ],
                 "repeated_occurrences": evidence.get("repeated_occurrences"),
                 "baseline": "state_delta_only",
+            }
+        if code == "scene_duplicate_paragraph":
+            if not isinstance(evidence, dict):
+                return None
+            return {
+                "duplicate_paragraph_count": evidence.get("duplicate_paragraph_count"),
+                "duplicate_ratio": evidence.get("duplicate_ratio"),
+                "baseline": "one_occurrence_then_new_consequence",
             }
         if code == "scene_procedural_motion":
             if not isinstance(evidence, dict):

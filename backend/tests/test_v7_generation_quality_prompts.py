@@ -2453,6 +2453,31 @@ def test_combined_scene_retry_repairs_cooccurring_structure_signals_together():
     ) is None
 
 
+def test_combined_scene_retry_repairs_cross_scene_duplicates_as_new_events():
+    codes = {"scene_duplicate_paragraph", "scene_semantic_duplicate"}
+    route = GenerationEngine._combined_style_retry_route(codes)
+
+    assert route is not None
+    assert "完整段落只能保留一次" in route
+    assert "新的阻碍、主动选择和结果" in route
+    assert GenerationEngine._is_style_only_retry(codes) is True
+    assert GenerationEngine._can_accept_style_warning(codes) is False
+
+    evidence = GenerationEngine._safe_scene_retry_evidence({
+        "code": "scene_duplicate_paragraph",
+        "evidence": {
+            "duplicate_paragraph_count": 1,
+            "duplicate_ratio": 0.0174,
+            "examples": ["不得回放原段"],
+        },
+    })
+    assert evidence == {
+        "duplicate_paragraph_count": 1,
+        "duplicate_ratio": 0.0174,
+        "baseline": "one_occurrence_then_new_consequence",
+    }
+
+
 def test_scene_budget_guard_rejects_candidate_that_consumes_future_scene_minimums():
     accepted_chars = 4300
     candidate_chars = 700
