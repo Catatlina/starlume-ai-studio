@@ -130,8 +130,17 @@ def analyze_deai_patterns(
     text: str,
     *,
     profile: dict[str, Any] | None = None,
+    structural_min_chars: int = 500,
+    structural_min_paragraphs: int = 0,
 ) -> dict[str, Any]:
-    """Return explainable risk signals; higher risk means more review needed."""
+    """Return explainable risk signals; higher risk means more review needed.
+
+    ``structural_min_chars`` and ``structural_min_paragraphs`` only control
+    the sample-size gate for the statistical structural-AI pass.  They do not
+    disable the other deterministic checks.  Generation-time callers use a
+    larger evidence floor than chapter-scale review because a short serial
+    scene cannot support reliable paragraph-opening or rhythm conclusions.
+    """
     if not text or not text.strip():
         return {
             "schema_version": "deai-metrics-v1",
@@ -174,7 +183,12 @@ def analyze_deai_patterns(
     # 与词级检查并联，补充检测行文模式和结构。以前这里只返回信息，
     # 导致整章结构已经呈现机器化特征时仍然不会触发语义重写。
     structural_ai_smell_result = None
-    if size >= 500:  # 文本太短时不做模式级检测，结果不准确
+    paragraph_count = len([item for item in re.split(r"\n{2,}|\n", text) if item.strip()])
+    if (
+        size >= max(1, int(structural_min_chars))
+        and paragraph_count >= max(0, int(structural_min_paragraphs))
+    ):
+        # 文本太短或段落样本太少时不做模式级检测，结果不准确
         # 根据平台选择阈值预设
         platform = profile.get("platform") if profile else None
         if platform == "fanqie":

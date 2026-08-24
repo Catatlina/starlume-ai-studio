@@ -4079,10 +4079,14 @@ class GenerationEngine:
             current_card,
             scene_index=current_scene_number,
         )
-        current_completion_floor = min(
-            current_nominal_maximum,
-            current_target + SCENE_NATURAL_LENGTH_SOFT_OVERFLOW_CHARS,
-        )
+        # The scene's nominal maximum is the minimum completion envelope for
+        # the current Provider call.  Reserving only ``target + 64`` made a
+        # 400-character opening compete with a complete 520-character event;
+        # DeepSeek then produced a coherent 548-character scene that could
+        # not fit the scheduler's artificial 464-character remainder.  This
+        # is still bounded by the chapter ceiling and future hard minimums;
+        # it is not a fixed per-scene target.
+        current_completion_floor = current_nominal_maximum
         reserve_cap = max(0, remaining_budget - current_completion_floor)
         requested_reserve = max(future_minimum, planned_future_share)
         # If the chapter plan itself is infeasible, retain the future hard
@@ -4114,7 +4118,11 @@ class GenerationEngine:
         if not candidate:
             return [{"code": "scene_empty", "message": "Provider returned an empty scene"}]
         flags: list[dict[str, Any]] = []
-        metrics = analyze_deai_patterns(candidate)
+        metrics = analyze_deai_patterns(
+            candidate,
+            structural_min_chars=800,
+            structural_min_paragraphs=8,
+        )
         generation_naturalness = inspect_generation_naturalness(candidate)
         retry_codes = {
             "dash_density",
@@ -5351,7 +5359,11 @@ class GenerationEngine:
                 if truncated:
                     truncation_seen = True
                 candidate = str(result.get("text") or "").strip()
-                scene_metrics = analyze_deai_patterns(candidate)
+                scene_metrics = analyze_deai_patterns(
+                    candidate,
+                    structural_min_chars=800,
+                    structural_min_paragraphs=8,
+                )
                 issues = []
                 if not truncated and index == 1:
                     opening_plan = scene_plan.get("opening_plan") or (

@@ -1882,13 +1882,33 @@ def test_future_scene_reserve_is_proportional_and_not_a_fixed_scene_budget():
     )
 
     assert SCENE_FUTURE_RESERVE_RATIO == 1.0
-    assert first_reserve == 1936
-    assert second_reserve == 936
+    assert first_reserve == 1700
+    assert second_reserve == 700
     assert final_reserve == 0
     assert first_reserve > sum(
         GenerationEngine._scene_length_bounds(card, scene_index=index)[0]
         for index, card in enumerate(cards[1:], start=2)
     )
+
+
+def test_scene_structural_smell_requires_a_scene_sized_sample():
+    short_scene = "\n\n".join([
+        "苏长庚把扫帚靠在墙边，抬头看了眼门缝里的水。",
+        "苏长庚没有立刻推门，先把湿掉的纸包塞进袖口。",
+        "门后的声音停了一下，台阶上多出一圈水印。",
+        "他把灯芯往上拨，楼梯口仍旧没有人影。",
+        "苏长庚退开半步，手指按住门闩。",
+        "门闩又动了一下，纸包里的硬物碰到了他的手腕。",
+    ])
+
+    flags = GenerationEngine._scene_naturalness_flags(short_scene)
+
+    assert not any(item["code"] == "structural_ai_smell" for item in flags)
+    assert analyze_deai_patterns(
+        short_scene,
+        structural_min_chars=800,
+        structural_min_paragraphs=8,
+    )["structural_ai_smell"] is None
 
 
 def test_chapter_completion_uses_reader_budget_range_not_nominal_target():
