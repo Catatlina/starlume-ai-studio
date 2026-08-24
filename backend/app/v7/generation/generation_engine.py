@@ -92,7 +92,7 @@ from ..integration.quality import CHAPTER_MIRROR_HARD_GATE, PAYOFF_VARIETY_HARD_
 logger = logging.getLogger(__name__)
 
 CHAPTER_STATE_TYPE = "chapter"
-SCENE_SERIAL_GENERATION_VERSION = "2.38.0"
+SCENE_SERIAL_GENERATION_VERSION = "2.39.0"
 # Keep the canonical writer loop intentionally small.  Candidate fan-out and
 # local prose surgery belong to explicit/manual tooling, not the production
 # chapter path; nested retries made the writer see too many competing rules.
@@ -5504,6 +5504,22 @@ class GenerationEngine:
                                 current_scene_number=index,
                                 accepted_chars=accepted_chars,
                                 chapter_max_chars=chapter_max_chars,
+                            )
+                            # The candidate itself is now the observed
+                            # current-scene size. Do not let the planner keep
+                            # a larger future reserve than the chapter can
+                            # actually leave after accepting this complete
+                            # scene; future beats can use the smaller share
+                            # on their own generation pass.
+                            candidate_fit_reserve = max(
+                                0,
+                                chapter_max_chars
+                                - accepted_chars
+                                - candidate_word_count,
+                            )
+                            future_minimum_chars = min(
+                                future_minimum_chars,
+                                candidate_fit_reserve,
                             )
                             budget_overrun = (
                                 accepted_chars
