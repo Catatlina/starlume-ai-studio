@@ -588,6 +588,14 @@ def test_generation_naturalness_does_not_treat_two_characters_turning_as_a_loop(
     assert "scene_repeated_action_loop" not in codes
 
 
+def test_generation_naturalness_does_not_merge_posture_and_gaze_actions():
+    text = "他靠回墙角，又回头看了一眼楼梯上方。第七层安安静静的，他收回目光。"
+
+    codes = {item["code"] for item in inspect_generation_naturalness(text)["flags"]}
+
+    assert "scene_repeated_action_loop" not in codes
+
+
 def test_generation_protocol_uses_strict_baseline_and_selected_route():
     protocol = render_generation_style_protocol("object_consequence")
 

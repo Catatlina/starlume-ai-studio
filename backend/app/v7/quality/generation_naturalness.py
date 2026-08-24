@@ -35,7 +35,15 @@ _SIMILE_RE = re.compile(
     r"(?:好像|仿佛|如同|宛如|犹如|像)[^。！？!?\n，,]{0,18}"
 )
 _REPEATED_ACTION_PATTERNS: tuple[tuple[str, str], ...] = (
-    ("put_back_loop", r"(?:放回|放下|靠回|重新握起|重新拿起|收回).{0,80}(?:放回|放下|靠回|重新握起|重新拿起|收回)"),
+    # Do not treat different natural actions as one loop.  For example,
+    # "靠回墙角……收回目光" is a posture change followed by a gaze change,
+    # not a repeated prop action.  Keep only the high-confidence same-action
+    # and explicit put-down/raise-again patterns.
+    ("put_back_loop", r"(?:放回|放下).{0,80}(?:放回|放下|重新握起|重新拿起)"),
+    ("recline_loop", r"靠回.{0,80}靠回"),
+    ("regrip_loop", r"重新握起.{0,80}重新握起"),
+    ("regrab_loop", r"重新拿起.{0,80}重新拿起"),
+    ("withdraw_loop", r"收回.{0,80}收回"),
 )
 
 # Repeating an injured character's state once can be natural.  Repeating two
