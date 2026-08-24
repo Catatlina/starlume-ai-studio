@@ -1570,6 +1570,8 @@ def test_scene_serial_moves_opening_pacing_constraints_into_generation_contract(
     assert "重大袭击、对抗或爆发结束后" in prompt
     assert "本章前半推进硬要求" in prompt
     assert "不得把本场写成独立的教学、闲聊、帮忙或日常缓冲" in prompt
+    assert "前两段内必须落下本场第一次阻碍" in prompt
+    assert "最迟不超过前240字" in prompt
     assert "关键异常、开门、封印松动、袭击、修炼变化或新能力必须先写可见前提/征兆" in prompt
     assert "碑文、幻象、梦境或他人话语里的数字/年代属于原说话者" in prompt
     assert "本场建议约写" in prompt

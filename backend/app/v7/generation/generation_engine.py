@@ -4811,6 +4811,8 @@ class GenerationEngine:
             "【真人可读正文协议（生成期执行）】"
             "本场只围绕一个正在发生的问题推进：让一个具体动作或对白改变现场，再写人物如何应对，"
             "完成一次选择和可见结果后就收束，不要在同一场并列讲设定、回忆、人物履历和主题。"
+            "无论第几场，前两段内必须落下本场第一次阻碍、线索反馈、他人介入或选择代价，最迟不超过前240字；"
+            "不得先用到达、走路、寻找、翻找或观察过程铺满前半场；若移动不可避免，每一段都必须同时改变位置并产生新信息、阻碍或决定。"
             "信息不要一次交代完；允许人物漏听、误判、答非所问、把话说到一半改口，"
             "但每个停顿都必须留下现场压力或下一步选择。"
             "旁白不替读者解释刚刚发生的事情，不写‘这意味着/这说明/他意识到/他心里清楚/不是梦或错觉’式结论；"
@@ -5681,6 +5683,27 @@ class GenerationEngine:
                         feedback += (
                             "\n动作回环修复硬要求：不要重复‘放回/拿起/转身/回头’来表示犹豫；"
                             "保留一次动作，另一处必须改成新的信息、阻碍、选择或可见后果，不能原地重述。"
+                        )
+                    if any(
+                        isinstance(item, dict)
+                        and item.get("code") == "scene_procedural_motion"
+                        for item in issues
+                    ):
+                        motion_issue = next(
+                            (
+                                item
+                                for item in issues
+                                if isinstance(item, dict)
+                                and item.get("code") == "scene_procedural_motion"
+                            ),
+                            {},
+                        )
+                        motion_evidence = motion_issue.get("evidence") or {}
+                        first_turn_chars = motion_evidence.get("first_turn_chars") or "未知"
+                        feedback += (
+                            f"\n行程记录修复硬要求：上一版直到约 {first_turn_chars} 字才出现第一个有效转折；"
+                            "本次从头完整重写，前两段或前240字内必须出现本场阻碍、线索反馈、他人介入、路线选择代价或可见后果。"
+                            "压缩无事件的到达、走路、寻找、翻找和观察，不要把移动拆成连续短段；每次移动都必须带来位置变化并立刻改变信息、风险或决定。"
                         )
                     if any(
                         isinstance(item, dict)
