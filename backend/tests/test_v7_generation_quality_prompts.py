@@ -1990,7 +1990,7 @@ def test_scene_length_bounds_make_pacing_budget_a_generation_contract():
     )
 
 
-def test_future_scene_reserve_is_proportional_and_not_a_fixed_scene_budget():
+def test_future_scene_reserve_keeps_only_minimum_complete_event_space():
     cards = [
         {"target_words": 1000},
         {"target_words": 1000},
@@ -2017,11 +2017,11 @@ def test_future_scene_reserve_is_proportional_and_not_a_fixed_scene_budget():
     )
 
     assert SCENE_FUTURE_RESERVE_RATIO == 1.0
-    assert SCENE_FINAL_COMPLETION_RESERVE_CHARS == 1200
-    assert first_reserve == 1468
-    assert second_reserve == SCENE_FINAL_COMPLETION_RESERVE_CHARS
+    assert SCENE_FINAL_COMPLETION_RESERVE_CHARS == 0
+    assert first_reserve == 900
+    assert second_reserve == 450
     assert final_reserve == 0
-    assert first_reserve > sum(
+    assert first_reserve >= sum(
         GenerationEngine._scene_length_bounds(card, scene_index=index)[0]
         for index, card in enumerate(cards[1:], start=2)
     )

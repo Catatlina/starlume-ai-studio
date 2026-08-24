@@ -174,16 +174,14 @@ SCENE_MIXED_TRUNCATION_OVERLONG_REPAIR_MARGIN = 1.10
 SCENE_PROVIDER_TOKEN_CAP = 6000
 SCENE_TARGET_MAX_RATIO = 1.30
 SCENE_NATURAL_LENGTH_TOLERANCE = 1.13
-# Reserve future scene capacity from the remaining chapter budget in proportion
-# to the current beat plan. This is a scheduler allocation, not a requirement
-# that every scene hit a fixed word count; the chapter ceiling remains the only
-# reader-facing hard limit.
+# The chapter ceiling is the only reader-facing hard limit. Future scenes keep
+# their own minimum complete-event space, while unused budget remains available
+# to the current scene; no fixed per-scene or final-scene quota is imposed.
 SCENE_FUTURE_RESERVE_RATIO = 1.00
-# Keep enough room for the final scene to show result, consequence and the
-# next pressure. Real Provider evidence showed that a complete closing scene
-# needs about 1.1k-1.2k Chinese characters; a 720-character floor left the
-# model with an incomplete tail and caused repeated truncation retries.
-SCENE_FINAL_COMPLETION_RESERVE_CHARS = 1200
+# Kept as a compatibility marker for persisted generation evidence. It is no
+# longer used as a hard scheduler floor; the final scene uses its own planned
+# minimum and the remaining chapter budget.
+SCENE_FINAL_COMPLETION_RESERVE_CHARS = 0
 # Keep a small rounding/paragraph variance allowance.  A 32-character
 # boundary was rejecting otherwise natural scenes by a few dozen characters;
 # chapter-level target reservation remains the hard ceiling.
@@ -4132,31 +4130,17 @@ class GenerationEngine:
     ) -> int:
         """Keep a proportional completion envelope for scenes not yet written.
 
-        The old scheduler reserved only each future scene's 45% minimum. That
-        allowed an early Provider response to consume most of the chapter and
-        left the final scene with too little room for a complete event. The
-        replacement is still flexible: it reserves the future beats' share of
-        the *remaining* chapter budget, bounded by their natural scene
-        capacities. It therefore reallocates space between scenes without
-        imposing a fixed per-scene word count.
+        Future beat targets guide planning, but they are not a hard quota. The
+        scheduler reserves only each unwritten scene's minimum complete-event
+        space. Any remaining room belongs to the current scene, and a complete
+        candidate is later checked only against the chapter ceiling.
         """
         future_cards = cards[current_scene_number:]
         if not future_cards:
             return 0
 
         current_card = cards[current_scene_number - 1]
-        current_target = max(1, int(current_card.get("target_words") or 1))
-        future_target = sum(
-            max(1, int(card.get("target_words") or 1))
-            for card in future_cards
-        )
         remaining_budget = max(0, chapter_max_chars - accepted_chars)
-        planned_future_share = int(
-            remaining_budget
-            * future_target
-            / max(1, current_target + future_target)
-            * SCENE_FUTURE_RESERVE_RATIO
-        )
         future_minimum = sum(
             GenerationEngine._scene_length_bounds(
                 card,
@@ -4173,30 +4157,7 @@ class GenerationEngine:
             final_future_card,
             scene_index=final_future_index,
         )
-        planned_chapter_chars = sum(
-            max(1, int(card.get("target_words") or 1))
-            for card in cards
-        )
-        final_completion_reserve = (
-            SCENE_FINAL_COMPLETION_RESERVE_CHARS
-            if planned_chapter_chars >= 1800
-            else min(
-                720,
-                max(final_minimum, int(chapter_max_chars * 0.30)),
-            )
-        )
-        future_minimum = max(
-            future_minimum,
-            final_minimum,
-            # Chapter-level completion space wins over the final beat's
-            # nominal capacity. The Provider needs room to finish the result,
-            # consequence and next pressure; the scene target is a planning
-            # hint and must not shrink this reserve back to an unusable tail
-            # for a full chapter. Small skeleton/test chapters retain a
-            # proportional reserve instead of inheriting the long-chapter
-            # floor.
-            final_completion_reserve,
-        )
+        future_minimum = max(future_minimum, final_minimum)
         future_natural_capacity = sum(
             GenerationEngine._scene_allowed_max_chars(
                 card,
@@ -4226,11 +4187,12 @@ class GenerationEngine:
             current_natural_capacity,
         )
         reserve_cap = max(0, remaining_budget - current_completion_floor)
-        requested_reserve = max(future_minimum, planned_future_share)
+        requested_reserve = future_minimum
         # If the chapter plan itself is infeasible, retain the future hard
         # minimum and let the caller fail before a Provider call with an
-        # explicit exhausted-budget error. Otherwise keep enough current-scene
-        # room for the target plus ordinary paragraph variance.
+        # explicit exhausted-budget error. Otherwise all remaining slack is
+        # available to the current scene; the chapter ceiling remains the only
+        # reader-facing hard limit.
         if reserve_cap < future_minimum:
             return future_minimum
         return min(
