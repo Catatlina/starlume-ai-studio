@@ -480,6 +480,20 @@ def test_object_opening_recognises_subtle_object_motion_and_contact():
         assert result["observed_mode"] == "object"
 
 
+def test_object_opening_recognises_object_falling_from_a_door_gap():
+    text = "门缝里的灰还在往下落，落在他脚边，无声无息。苏长庚盯着那行字看了很久。"
+
+    assert classify_opening(text) == "object"
+    result = inspect_opening(
+        text,
+        requested_mode="object",
+        chapter_number=2,
+        recent_modes=["action"],
+    )
+    assert result["passed"] is True
+    assert result["observed_mode"] == "object"
+
+
 def test_later_action_does_not_hide_an_unfulfilled_object_opening():
     text = "清晨，藏经阁还没亮透，苏长庚的帚尖已经落在第七层台阶上。门缝里的光随后才亮起来。"
 

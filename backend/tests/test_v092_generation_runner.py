@@ -18,7 +18,7 @@ def _result(**overrides):
         "quality_gate": {"passed": True, "failures": []},
         "continuity": {"passed": True, "issues": []},
         "reader_chapter_budget": {"minimum_chars": 1944, "maximum_chars": 3000},
-        "generation_quality": {"generation_hard_max_chars": 3000},
+        "generation_quality": {"passed": True, "generation_hard_max_chars": 3000},
         "review_score": 91.0,
     }
     result.update(overrides)
@@ -33,7 +33,7 @@ def test_generation_scope_does_not_require_publication_gates():
     assert report["failures"] == []
 
 
-def test_generation_scope_rejects_v7_quality_failure():
+def test_generation_scope_keeps_review_failure_as_human_edit_warning():
     report = RUNNER.validate_generation_result(
         _result(
             passed_review=False,
@@ -42,8 +42,23 @@ def test_generation_scope_rejects_v7_quality_failure():
         "字" * 2500,
     )
 
+    assert report["passed"] is True
+    assert report["review_is_blocking"] is False
+    assert report["review_observation"]["passed_review"] is False
+
+
+def test_generation_scope_still_rejects_generation_quality_failure():
+    report = RUNNER.validate_generation_result(
+        _result(generation_quality={
+            "passed": False,
+            "generation_hard_max_chars": 3000,
+            "failures": [{"code": "opening_mode_mismatch"}],
+        }),
+        "字" * 2500,
+    )
+
     assert report["passed"] is False
-    assert {item["code"] for item in report["failures"]} >= {"v7_review", "v7_quality_gate"}
+    assert {item["code"] for item in report["failures"]} == {"generation_quality"}
 
 
 def test_generation_scope_rejects_only_the_hard_budget_overflow():

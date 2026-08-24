@@ -191,7 +191,11 @@ async def generate_one_chapter(
             or ""
         )
         status = result.get("status", "unknown")
-        success = status == "completed" and bool(chapter_id)
+        # Generation scope keeps a real draft even when the post-generation
+        # review marks it needs_review.  That status is a human-edit signal,
+        # not a transport or persistence failure.  Publication scope remains
+        # strict and runs the seven release gates separately.
+        success = status in {"completed", "needs_review"} and bool(chapter_id)
         log(
             f"第{chapter_number}章生成结束: status={status}, chapter_id={chapter_id}, "
             f"耗时={time.time() - started:.1f}s"
@@ -311,17 +315,21 @@ def validate_generation_result(result: dict[str, Any], text: str) -> dict[str, A
     # envelope fields.
     payload = result.get("raw") if isinstance(result.get("raw"), dict) else result
     failures: list[dict[str, Any]] = []
-    if payload.get("status") != "completed":
+    if payload.get("status") not in {"completed", "needs_review"}:
         failures.append({"code": "generation_status", "actual": payload.get("status")})
-    if payload.get("passed_review") is not True:
-        failures.append({"code": "v7_review", "actual": payload.get("passed_review")})
 
-    quality_gate = payload.get("quality_gate") or {}
-    if quality_gate.get("passed") is not True:
-        failures.append({
-            "code": "v7_quality_gate",
-            "failures": list(quality_gate.get("failures") or []),
-        })
+    # The authoring path is generation-first: V7 review remains observable and
+    # is surfaced as a human-edit warning, while only generation-contract
+    # failures stop the next chapter.  Publication scope still requires the
+    # strict seven-gate path below the runner.
+    review_observation = {
+        "status": payload.get("status"),
+        "passed_review": payload.get("passed_review"),
+        "review_score": payload.get("review_score"),
+        "quality_gate_passed": (payload.get("quality_gate") or {}).get("passed"),
+        "issues": list(payload.get("issues") or []),
+        "rework_count": payload.get("rework_count", 0),
+    }
 
     continuity = payload.get("continuity") or {}
     if continuity and continuity.get("passed") is False:
@@ -332,6 +340,11 @@ def validate_generation_result(result: dict[str, Any], text: str) -> dict[str, A
 
     budget = payload.get("reader_chapter_budget") or {}
     generation_quality = payload.get("generation_quality") or {}
+    if generation_quality.get("passed") is not True:
+        failures.append({
+            "code": "generation_quality",
+            "failures": list(generation_quality.get("failures") or []),
+        })
     try:
         # Match the canonical V7/runtime budget metric: paragraph separators
         # and other whitespace are formatting, not正文字符. Using len(text)
@@ -363,6 +376,8 @@ def validate_generation_result(result: dict[str, Any], text: str) -> dict[str, A
         "generation_maximum": maximum,
         "v7_status": payload.get("status"),
         "review_score": payload.get("review_score"),
+        "review_observation": review_observation,
+        "review_is_blocking": False,
         "failures": failures,
     }
 
@@ -417,20 +432,24 @@ async def main() -> None:
 
             try:
                 text = get_chapter_text(result["chapter_id"])
-                result["text_length"] = len(text)
+                from app.v7.generation.generation_engine import chinese_word_count
+
+                result["text_length"] = chinese_word_count(text)
                 if not text:
                     raise RuntimeError("generated chapter has no persisted body")
 
                 if args.acceptance_scope == "generation":
                     generation_validation = validate_generation_result(result, text)
                     result["generation_validation"] = generation_validation
+                    result["text_length"] = generation_validation["text_length"]
                     result["acceptance_success"] = generation_validation["passed"]
                     if generation_validation["passed"]:
                         success_count += 1
                     log(
-                        f"第{chapter_number}章正文={len(text)}字，"
+                        f"第{chapter_number}章正文={generation_validation['text_length']}字，"
                         f"生成验收={'通过' if generation_validation['passed'] else '失败'}，"
-                        f"V7评分={result.get('review_score')}"
+                        f"V7评分={result.get('raw', {}).get('review_score')}，"
+                        f"审阅状态={result.get('status')}"
                     )
                     if not generation_validation["passed"]:
                         log(f"生成验收失败原因={generation_validation['failures']}")
