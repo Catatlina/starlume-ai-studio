@@ -91,7 +91,7 @@ from ..integration.quality import CHAPTER_MIRROR_HARD_GATE, PAYOFF_VARIETY_HARD_
 logger = logging.getLogger(__name__)
 
 CHAPTER_STATE_TYPE = "chapter"
-SCENE_SERIAL_GENERATION_VERSION = "2.34.0"
+SCENE_SERIAL_GENERATION_VERSION = "2.35.0"
 # Keep the canonical writer loop intentionally small.  Candidate fan-out and
 # local prose surgery belong to explicit/manual tooling, not the production
 # chapter path; nested retries made the writer see too many competing rules.
@@ -3765,6 +3765,7 @@ class GenerationEngine:
             "scene_state_echo",
             "scene_procedural_motion",
             "scene_subject_opening",
+            "scene_opening_contract",
         })
 
     @staticmethod
@@ -4997,7 +4998,25 @@ class GenerationEngine:
                     + content_generation_contract(self.quality_profile)
                 )
                 if attempt and candidate:
-                    if "scene_metaphor_density" in previous_issue_codes:
+                    if "scene_opening_contract" in previous_issue_codes:
+                        opening_plan = scene_plan.get("opening_plan") or {}
+                        opening_mode = opening_plan.get("mode") or "object"
+                        opening_label = opening_plan.get("label") or opening_mode
+                        metaphor_rule = (
+                            "非对白中的‘像、好像、仿佛、如同、宛如、犹如’必须为0处；"
+                            if "scene_metaphor_density" in previous_issue_codes
+                            else ""
+                        )
+                        scene_system_prompt = (
+                            "你是中文网文的生成期开场修复编辑。必须依据本场 scene_card、已确认状态和"
+                            "上一场交接点，从头重新写出完整正文；事件、人物、因果和本场结果必须保留。"
+                            f"本次指定开场类型为‘{opening_label}’（{opening_mode}），首句必须直接让指定的"
+                            "物件异常、外部事件、对白冲突或环境变化先发生，不能先写人物扫、走、站、抬手等动作。"
+                            f"{metaphor_rule}只输出正文，不输出说明。"
+                            + third_person_generation_contract()
+                            + content_generation_contract(self.quality_profile)
+                        )
+                    elif "scene_metaphor_density" in previous_issue_codes:
                         scene_system_prompt = (
                             "你是中文网文的生成期字面现场编辑。必须依据本场 scene_card、已确认状态和"
                             "上一场交接点，从头重写出完整正文；保留事件、人物、因果和本场结果，"

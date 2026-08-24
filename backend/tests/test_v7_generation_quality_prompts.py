@@ -1988,6 +1988,9 @@ def test_expression_only_scene_retry_can_get_one_fresh_style_path():
         attempt=2,
         max_attempts=3,
     ) is False
+    assert GenerationEngine._is_style_only_retry(
+        {"scene_opening_contract", "scene_metaphor_density"}
+    ) is True
 
 
 def test_scene_budget_guard_rejects_candidate_that_consumes_future_scene_minimums():
