@@ -13,3 +13,19 @@ def test_real_first_person_narration_still_fails_closed():
 
     assert result["passed"] is False
     assert result["first_person_count"] == 1
+
+
+def test_wu_inside_common_word_is_not_first_person_narration():
+    result = analyze_third_person_narrative(
+        "赵小胖脸色一僵，支吾了两声：‘就……路过，路过。’"
+    )
+
+    assert result["passed"] is True
+    assert result["first_person_count"] == 0
+
+
+def test_standalone_classical_wu_still_fails_closed():
+    result = analyze_third_person_narrative("吾将把这笔账记在心里。")
+
+    assert result["passed"] is False
+    assert result["first_person_tokens"] == ["吾"]

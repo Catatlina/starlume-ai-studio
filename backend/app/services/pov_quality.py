@@ -15,7 +15,8 @@ THIRD_PERSON_NARRATIVE_POLICY = "third_person_narrative"
 
 # Match longer forms first so ``我们`` is not counted twice as ``我们`` + ``我``.
 FIRST_PERSON_PATTERN = re.compile(
-    r"我们|咱们|你我|俺们|吾辈|吾等|余等|俺|吾|咱|我|"
+    r"我们|咱们|你我|俺们|吾辈|吾等|余等|俺|咱|我|"
+    r"(?<![\u4e00-\u9fff])吾(?=[，。！？；：\s]|认为|觉得|想|看|听|说|要|将|便|已|未|不|也|只|可|能|是|乃)|"
     r"(?<![\u4e00-\u9fff])余(?=[，。！？；：\s]|认为|觉得|想|看|听|说|要|将|便|已|未|不|也|只|可|能|是|乃)",
 )
 
