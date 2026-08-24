@@ -1707,7 +1707,7 @@ def test_final_scene_requires_an_observable_payoff_cost_anchor():
     assert any(flag["code"] == "scene_payoff_cost_missing" for flag in missing)
 
     present = GenerationEngine._scene_naturalness_flags(
-        "门缝里的光熄灭了，青砖上多出一道细裂缝。",
+        "门缝里的光熄灭了，青砖上的封印磨损了一圈。",
         payoff_contract={"cost": "封印磨损加速"},
     )
     assert not any(flag["code"] == "scene_payoff_cost_missing" for flag in present)
