@@ -472,6 +472,16 @@ def test_natural_measure_phrase_counts_as_an_object_opening():
     assert result["passed"] is True
 
 
+def test_object_opening_accepts_light_seeping_through_a_door_gap():
+    text = "门缝里透出一线白，不是黑气，是光。"
+
+    assert classify_opening(text) == "object"
+    result = inspect_opening(text, requested_mode="object", chapter_number=2)
+
+    assert result["passed"] is True
+    assert result["observed_mode"] == "object"
+
+
 def test_generation_naturalness_blocks_explanation_metaphor_and_action_loops():
     text = (
         "不是灰尘，而是门缝里透出的一线光。他终于意识到这意味着封印松动，"
