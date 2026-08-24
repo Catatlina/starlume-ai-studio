@@ -92,7 +92,7 @@ from ..integration.quality import CHAPTER_MIRROR_HARD_GATE, PAYOFF_VARIETY_HARD_
 logger = logging.getLogger(__name__)
 
 CHAPTER_STATE_TYPE = "chapter"
-SCENE_SERIAL_GENERATION_VERSION = "2.39.0"
+SCENE_SERIAL_GENERATION_VERSION = "2.40.0"
 # Keep the canonical writer loop intentionally small.  Candidate fan-out and
 # local prose surgery belong to explicit/manual tooling, not the production
 # chapter path; nested retries made the writer see too many competing rules.
@@ -108,12 +108,14 @@ SCENE_STYLE_RETRY_MAX_ATTEMPTS = 3
 # budget and never rescues a materially oversized scene.
 SCENE_BUDGET_RETRY_MAX_ATTEMPTS = 3
 # A budget retry must leave room for a complete scene while compensating for
-# DeepSeek's observed character/token variance.  The chapter ceiling and the
+# DeepSeek's observed character/token variance. The chapter ceiling and the
 # future-scene minimums are already hard constraints; 0.72 starved a short
 # final scene, while the separately calibrated 0.86 completed the scene and
-# stayed within the remaining chapter envelope.
+# stayed within the remaining chapter envelope. The overflow threshold is
+# wide enough to compress a complete final scene into its remaining share,
+# while still failing closed on a runaway candidate.
 SCENE_BUDGET_RETRY_RATIO = 0.82
-SCENE_BUDGET_RETRY_MAX_OVERFLOW_CHARS = 480
+SCENE_BUDGET_RETRY_MAX_OVERFLOW_CHARS = 1200
 SCENE_BUDGET_RETRY_MIN_HEADROOM_CHARS = 180
 SCENE_BUDGET_RETRY_COMPLETION_MARGIN = 0.86
 # A small final scene can be complete at the character level but still hit a
