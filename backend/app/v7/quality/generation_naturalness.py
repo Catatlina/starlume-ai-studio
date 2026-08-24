@@ -202,6 +202,7 @@ def inspect_generation_naturalness(text: Any) -> dict[str, Any]:
     compact = re.sub(r"\s+", "", narrative)
     size = len(compact)
     flags: list[dict[str, Any]] = []
+    warnings: list[dict[str, Any]] = []
     explanation_hits: list[dict[str, str]] = []
     for label, pattern in _EXPLANATION_PATTERNS:
         for match in re.finditer(pattern, narrative):
@@ -220,14 +221,27 @@ def inspect_generation_naturalness(text: Any) -> dict[str, Any]:
     # on longer scenes: three images in 900-1300 characters is not the same
     # problem as six images in a 600-character opening.  Scale the threshold
     # with scene size while keeping a floor so short scenes do not overfire.
-    # At least six images are required, and a longer scene gets roughly one
-    # allowed image per 160 narrative characters before this becomes a retry
-    # signal. Six short, context-bound comparisons in a 900–1100 character
-    # scene are not by themselves an AI-writing defect; treating them as a
-    # hard retry signal made the real Provider fail on ordinary scene texture.
-    # Dense image chains remain blocked, especially in shorter scenes.
+    # A scene gets a soft warning as soon as it exceeds the density baseline,
+    # but it only becomes a generation blocker after three additional images.
+    # Six-to-nine context-bound comparisons in a 900–1100 character scene are
+    # not by themselves an AI-writing defect; treating the soft band as a hard
+    # retry made the real Provider fail on ordinary scene texture. Dense image
+    # chains remain blocked, especially in shorter scenes.
     simile_limit = max(6, int(size / 160))
+    hard_simile_limit = simile_limit + 3
     if size >= 500 and len(similes) > simile_limit:
+        warnings.append({
+            "code": "scene_metaphor_density_warning",
+            "severity": "low",
+            "message": "非对白类比略多；优先改成可观察的动作、物件或结果，但不阻断本场",
+            "evidence": {
+                "count": len(similes),
+                "limit": simile_limit,
+                "hard_limit": hard_simile_limit,
+                "narrative_chars": size,
+            },
+        })
+    if size >= 500 and len(similes) > hard_simile_limit:
         flags.append({
             "code": "scene_metaphor_density",
             "severity": "medium",
@@ -235,6 +249,7 @@ def inspect_generation_naturalness(text: Any) -> dict[str, Any]:
             "evidence": {
                 "count": len(similes),
                 "limit": simile_limit,
+                "hard_limit": hard_simile_limit,
                 "examples": similes[:4],
                 "narrative_chars": size,
             },
@@ -312,6 +327,7 @@ def inspect_generation_naturalness(text: Any) -> dict[str, Any]:
         "narrative_chars": size,
         "explanation_count": len(explanation_hits),
         "metaphor_count": len(similes),
+        "warnings": warnings,
         "repeated_action_count": len(repeated_actions),
         "state_echo": state_echo,
         "procedural_motion": procedural_motion,
