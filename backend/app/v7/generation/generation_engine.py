@@ -121,8 +121,9 @@ SCENE_BUDGET_RETRY_COMPLETION_MARGIN = 0.86
 # Character budgets and Provider tokens are not one-to-one for Chinese prose.
 # The 0.86 compression ratio is useful for reducing runaway output, but on a
 # tight final scene it turned an 852-character envelope into 732 tokens and
-# cut the Provider off before the handoff. Keep the character envelope hard
-# while restoring a bounded completion allowance for the rewrite.
+# cut the Provider off before the handoff. The same failure can occur on a
+# small-scene 1.05 retry, so keep the character envelope hard while restoring
+# a bounded completion allowance for both rewrite paths.
 SCENE_COMPRESSED_RETRY_COMPLETION_HEADROOM_TOKENS = 240
 # A small final scene can be complete at the character level but still hit a
 # token ceiling before its handoff is written.  Give only this narrow envelope
@@ -3718,7 +3719,7 @@ class GenerationEngine:
         # making one bounded upward adjustment instead of jumping back to the
         # initial expansion margin.
         token_budget = int(maximum * margin)
-        if margin < 1.0:
+        if margin < 1.0 or maximum <= SCENE_BUDGET_RETRY_SMALL_SCENE_MAX_CHARS:
             token_budget += SCENE_COMPRESSED_RETRY_COMPLETION_HEADROOM_TOKENS
         return max(
             240,

@@ -2061,6 +2061,17 @@ def test_scene_overlong_retry_keeps_completion_headroom():
     )
     assert retry_limit > 850
 
+    small_scene_limit = engine._scene_generation_max_tokens(
+        {"target_words": 600},
+        scene_index=3,
+        max_scene_chars=625,
+        token_margin=SCENE_BUDGET_RETRY_SMALL_SCENE_COMPLETION_MARGIN,
+    )
+    assert small_scene_limit == (
+        int(625 * SCENE_BUDGET_RETRY_SMALL_SCENE_COMPLETION_MARGIN)
+        + SCENE_COMPRESSED_RETRY_COMPLETION_HEADROOM_TOKENS
+    )
+
 
 def test_truncated_scene_never_enters_overlong_envelope_shrink_mode():
     assert GenerationEngine._should_shrink_retry_envelope(
