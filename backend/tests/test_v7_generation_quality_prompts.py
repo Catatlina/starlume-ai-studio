@@ -1986,6 +1986,7 @@ def test_future_scene_reserve_is_proportional_and_not_a_fixed_scene_budget():
     )
 
     assert SCENE_FUTURE_RESERVE_RATIO == 1.0
+    assert SCENE_FINAL_COMPLETION_RESERVE_CHARS == 1200
     assert first_reserve == 1468
     assert second_reserve == SCENE_FINAL_COMPLETION_RESERVE_CHARS
     assert final_reserve == 0

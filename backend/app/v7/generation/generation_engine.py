@@ -179,9 +179,10 @@ SCENE_NATURAL_LENGTH_TOLERANCE = 1.13
 # reader-facing hard limit.
 SCENE_FUTURE_RESERVE_RATIO = 1.00
 # Keep enough room for the final scene to show result, consequence and the
-# next pressure. Without this floor, two natural early scenes can consume the
-# chapter and leave a 300-500 character tail that no Provider can close well.
-SCENE_FINAL_COMPLETION_RESERVE_CHARS = 720
+# next pressure. Real Provider evidence showed that a complete closing scene
+# needs about 1.1k-1.2k Chinese characters; a 720-character floor left the
+# model with an incomplete tail and caused repeated truncation retries.
+SCENE_FINAL_COMPLETION_RESERVE_CHARS = 1200
 # Keep a small rounding/paragraph variance allowance.  A 32-character
 # boundary was rejecting otherwise natural scenes by a few dozen characters;
 # chapter-level target reservation remains the hard ceiling.
