@@ -53,3 +53,13 @@ def test_generation_scope_rejects_only_the_hard_budget_overflow():
     assert report["failures"] == [
         {"code": "above_generation_maximum", "actual": 3001, "maximum": 3000}
     ]
+
+
+def test_generation_scope_accepts_the_runtime_execution_envelope():
+    report = RUNNER.validate_generation_result(
+        {"status": "completed", "success": True, "raw": _result()},
+        "字" * 2863,
+    )
+
+    assert report["passed"] is True
+    assert report["review_score"] == 91.0

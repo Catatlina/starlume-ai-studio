@@ -305,28 +305,33 @@ def validate_generation_result(result: dict[str, Any], text: str) -> dict[str, A
     evidence directly; it must not call the publication payoff assessor or
     require human disclosure confirmation before the author has edited prose.
     """
+    # ``generate_one_chapter`` returns an execution envelope and keeps the
+    # canonical V7 payload under ``raw``.  Accept both shapes so the runner
+    # cannot turn a valid V7 result into a false failure by reading only the
+    # envelope fields.
+    payload = result.get("raw") if isinstance(result.get("raw"), dict) else result
     failures: list[dict[str, Any]] = []
-    if result.get("status") != "completed":
-        failures.append({"code": "generation_status", "actual": result.get("status")})
-    if result.get("passed_review") is not True:
-        failures.append({"code": "v7_review", "actual": result.get("passed_review")})
+    if payload.get("status") != "completed":
+        failures.append({"code": "generation_status", "actual": payload.get("status")})
+    if payload.get("passed_review") is not True:
+        failures.append({"code": "v7_review", "actual": payload.get("passed_review")})
 
-    quality_gate = result.get("quality_gate") or {}
+    quality_gate = payload.get("quality_gate") or {}
     if quality_gate.get("passed") is not True:
         failures.append({
             "code": "v7_quality_gate",
             "failures": list(quality_gate.get("failures") or []),
         })
 
-    continuity = result.get("continuity") or {}
+    continuity = payload.get("continuity") or {}
     if continuity and continuity.get("passed") is False:
         failures.append({
             "code": "continuity",
             "issues": list(continuity.get("issues") or []),
         })
 
-    budget = result.get("reader_chapter_budget") or {}
-    generation_quality = result.get("generation_quality") or {}
+    budget = payload.get("reader_chapter_budget") or {}
+    generation_quality = payload.get("generation_quality") or {}
     try:
         char_count = len(text)
         minimum = int(budget.get("minimum_chars") or 0)
@@ -350,8 +355,8 @@ def validate_generation_result(result: dict[str, Any], text: str) -> dict[str, A
         "text_length": char_count,
         "reader_minimum": minimum,
         "generation_maximum": maximum,
-        "v7_status": result.get("status"),
-        "review_score": result.get("review_score"),
+        "v7_status": payload.get("status"),
+        "review_score": payload.get("review_score"),
         "failures": failures,
     }
 
