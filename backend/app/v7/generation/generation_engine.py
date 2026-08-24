@@ -4164,14 +4164,29 @@ class GenerationEngine:
             final_future_card,
             scene_index=final_future_index,
         )
+        planned_chapter_chars = sum(
+            max(1, int(card.get("target_words") or 1))
+            for card in cards
+        )
+        final_completion_reserve = (
+            SCENE_FINAL_COMPLETION_RESERVE_CHARS
+            if planned_chapter_chars >= 1800
+            else min(
+                720,
+                max(final_minimum, int(chapter_max_chars * 0.30)),
+            )
+        )
         future_minimum = max(
             future_minimum,
             final_minimum,
             # Chapter-level completion space wins over the final beat's
             # nominal capacity. The Provider needs room to finish the result,
             # consequence and next pressure; the scene target is a planning
-            # hint and must not shrink this reserve back to an unusable tail.
-            SCENE_FINAL_COMPLETION_RESERVE_CHARS,
+            # hint and must not shrink this reserve back to an unusable tail
+            # for a full chapter. Small skeleton/test chapters retain a
+            # proportional reserve instead of inheriting the long-chapter
+            # floor.
+            final_completion_reserve,
         )
         future_natural_capacity = sum(
             GenerationEngine._scene_allowed_max_chars(
