@@ -4241,20 +4241,13 @@ class GenerationEngine:
             current_card,
             scene_index=current_scene_number,
         )
-        current_natural_capacity = GenerationEngine._scene_allowed_max_chars(
-            current_card,
-            scene_index=current_scene_number,
-        )
-        # Reserve the full natural capacity of the current Provider call, not
-        # only its nominal scene maximum.  A 400-character opening had a
-        # nominal maximum of 520 but a bounded natural capacity of 651; the
-        # Provider's coherent 722-character candidate then had no legal room
-        # for its completion.  This remains bounded by the chapter ceiling and
-        # future hard minimums; it is not a fixed per-scene target.
-        current_completion_floor = max(
-            current_nominal_maximum,
-            current_natural_capacity,
-        )
+        # Reserve future capacity against the current scene's nominal complete
+        # envelope, not its looser natural-variance ceiling. The latter is a
+        # useful acceptance allowance, but treating it as pre-spend makes a
+        # normal long current scene consume the room needed by the final event.
+        # The current scene may still use any unused chapter room; this is only
+        # a planning reserve, not a fixed per-scene quota.
+        current_completion_floor = current_nominal_maximum
         reserve_cap = max(0, remaining_budget - current_completion_floor)
         requested_reserve = future_natural_capacity
         # If the chapter plan itself is infeasible, retain the future hard

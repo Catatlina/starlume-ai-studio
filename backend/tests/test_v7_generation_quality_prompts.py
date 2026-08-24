@@ -2081,11 +2081,11 @@ def test_future_scene_reserve_keeps_complete_event_capacity_available():
     second_capacity = GenerationEngine._scene_allowed_max_chars(cards[2], scene_index=3)
     assert first_reserve == min(
         first_capacity,
-        3000 - GenerationEngine._scene_allowed_max_chars(cards[0], scene_index=1),
+        3000 - GenerationEngine._scene_length_bounds(cards[0], scene_index=1)[1],
     )
     assert second_reserve == min(
         second_capacity,
-        3000 - 1000 - GenerationEngine._scene_allowed_max_chars(cards[1], scene_index=2),
+        3000 - 1000 - GenerationEngine._scene_length_bounds(cards[1], scene_index=2)[1],
     )
     assert final_reserve == 0
     assert first_reserve >= sum(
