@@ -6053,7 +6053,10 @@ class GenerationEngine:
                     elif code == "scene_chapter_budget_overrun":
                         issue_messages.append(
                             f"{code}[accepted={accepted_chars},candidate={candidate_word_count},"
-                            f"future_min={future_minimum_chars},chapter_max={chapter_max_chars}]"
+                            f"future_min={future_minimum_chars},chapter_max={chapter_max_chars},"
+                            f"attempt={attempt + 1}/{max_scene_attempts},"
+                            f"envelope={attempt_max_scene_chars},tokens={scene_token_limit},"
+                            f"margin={repair_margin},budget_retry={budget_retry}]"
                         )
                     elif code == "scene_reader_budget_overrun":
                         issue_messages.append(
