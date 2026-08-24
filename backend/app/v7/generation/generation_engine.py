@@ -6043,6 +6043,20 @@ class GenerationEngine:
                         issue_messages.append(
                             f"{code}[evidence={json.dumps(item.get('evidence'), ensure_ascii=False)}]"
                         )
+                    elif code == "repeated_paragraph_opening":
+                        opening = scene_metrics.get("repeated_paragraph_opening") or {}
+                        paragraph_count = len(
+                            [
+                                paragraph
+                                for paragraph in re.split(r"\n{2,}|\n", candidate)
+                                if paragraph.strip()
+                            ]
+                        )
+                        issue_messages.append(
+                            f"{code}[opening={opening.get('opening') or '?'},"
+                            f"count={opening.get('count') or 0},"
+                            f"ratio={opening.get('ratio') or 0},paragraphs={paragraph_count}]"
+                        )
                     else:
                         issue_messages.append(str(code))
                 raise AIGatewayError(
