@@ -3926,6 +3926,28 @@ class GenerationEngine:
         })
 
     @staticmethod
+    def _can_accept_style_warning(previous_issue_codes: set[str]) -> bool:
+        """Accept a bounded style retry without weakening story contracts.
+
+        A scene that still has one expression signal after its bounded repair
+        is not the same as a scene that lost its facts, payoff, POV or budget.
+        Keep the prose and record the signal for review; otherwise a stochastic
+        punctuation or cadence hit can discard an otherwise complete chapter.
+        """
+        return bool(previous_issue_codes) and previous_issue_codes.issubset({
+            "dash_density",
+            "ai_phrase",
+            "uniform_cadence",
+            "repeated_paragraph_opening",
+            "repeated_tic",
+            "structural_ai_smell",
+            "scene_repeated_action_loop",
+            "scene_state_echo",
+            "scene_procedural_motion",
+            "scene_subject_opening",
+        })
+
+    @staticmethod
     def _safe_scene_retry_evidence(issue: dict[str, Any]) -> dict[str, Any] | None:
         """Keep failed prose examples out of the next Writer prompt.
 
@@ -6052,6 +6074,22 @@ class GenerationEngine:
                             )
                     attempt += 1
                     continue
+                if candidate and self._can_accept_style_warning(previous_issue_codes):
+                    accepted_scene = candidate
+                    scene_warnings = [
+                        {
+                            "code": str(item.get("code") or "style_warning"),
+                            "severity": "low",
+                            "message": (
+                                "已完成一次有界表达修复，仍保留该文风信号；"
+                                "不影响本场事实、因果、预算或连续性验收"
+                            ),
+                        }
+                        for item in issues
+                        if isinstance(item, dict)
+                    ]
+                    attempts_used = attempt + 1
+                    break
                 issue_messages: list[str] = []
                 for item in issues:
                     code = item.get("code") if isinstance(item, dict) else "unknown"
