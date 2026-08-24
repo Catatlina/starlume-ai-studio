@@ -120,12 +120,11 @@ SCENE_BUDGET_RETRY_MAX_OVERFLOW_CHARS = 1200
 SCENE_BUDGET_RETRY_MIN_HEADROOM_CHARS = 180
 SCENE_BUDGET_RETRY_COMPLETION_MARGIN = 0.86
 # A complete scene can still overshoot a tight final remainder when the
-# Provider's completion margin is calibrated for ordinary prose.  The budget
-# retry is a distinct, low-variance path: keep the chapter ceiling hard while
-# preserving enough token space to finish the scene and its handoff.  This
-# must stay aligned with the calibrated completion margin below; a previous
-# 0.72 override starved a 1033-character scene and caused a false truncation.
-SCENE_BUDGET_RETRY_PROVIDER_MARGIN = 0.86
+# Provider's completion margin is calibrated for ordinary prose. The budget
+# retry uses the calibrated completion margin below; this older provider
+# marker remains separate so ordinary compression retries retain their own
+# completion headroom and accounting behavior.
+SCENE_BUDGET_RETRY_PROVIDER_MARGIN = 0.72
 # The normal compressed-retry headroom is intentionally generous for prose
 # completion.  The final-scene budget path has already reserved the exact
 # remaining chapter space, so a smaller headroom is needed when a Provider
@@ -5478,7 +5477,7 @@ class GenerationEngine:
                         )
                     else:
                         repair_margin = (
-                            SCENE_BUDGET_RETRY_PROVIDER_MARGIN
+                            SCENE_BUDGET_RETRY_COMPLETION_MARGIN
                             if provider != "openai"
                             else max(SCENE_BUDGET_RETRY_PROVIDER_MARGIN, 0.82)
                         )
