@@ -2370,9 +2370,11 @@ def test_budget_retry_envelope_preserves_scene_minimum_and_chapter_ceiling():
 
 def test_budget_retry_uses_the_calibrated_deepseek_completion_margin():
     # 1.05 allowed the real Provider to overshoot a 3000-char chapter after a
-    # bounded retry; 0.86 is the measured complete-scene calibration.
+    # bounded retry; 0.86 is the measured complete-scene calibration. The
+    # provider-specific budget branch must not silently override it with a
+    # starvation margin for ordinary (over-800-char) scenes.
     assert SCENE_BUDGET_RETRY_COMPLETION_MARGIN == 0.86
-    assert SCENE_BUDGET_RETRY_PROVIDER_MARGIN == 0.72
+    assert SCENE_BUDGET_RETRY_PROVIDER_MARGIN == 0.86
     assert SCENE_BUDGET_RETRY_COMPLETION_HEADROOM_TOKENS == 200
     assert SCENE_BUDGET_RETRY_SMALL_SCENE_MAX_CHARS == 800
     assert SCENE_BUDGET_RETRY_SMALL_SCENE_COMPLETION_MARGIN == 1.05

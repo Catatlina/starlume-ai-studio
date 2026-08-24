@@ -93,7 +93,7 @@ from ..integration.quality import CHAPTER_MIRROR_HARD_GATE, PAYOFF_VARIETY_HARD_
 logger = logging.getLogger(__name__)
 
 CHAPTER_STATE_TYPE = "chapter"
-SCENE_SERIAL_GENERATION_VERSION = "2.43.0"
+SCENE_SERIAL_GENERATION_VERSION = "2.44.0"
 # Keep the canonical writer loop intentionally small.  Candidate fan-out and
 # local prose surgery belong to explicit/manual tooling, not the production
 # chapter path; nested retries made the writer see too many competing rules.
@@ -121,10 +121,11 @@ SCENE_BUDGET_RETRY_MIN_HEADROOM_CHARS = 180
 SCENE_BUDGET_RETRY_COMPLETION_MARGIN = 0.86
 # A complete scene can still overshoot a tight final remainder when the
 # Provider's completion margin is calibrated for ordinary prose.  The budget
-# retry is a distinct, low-variance path: keep the chapter ceiling hard and
-# give the Provider less token headroom so its Chinese character output lands
-# inside the already-computed remaining budget.
-SCENE_BUDGET_RETRY_PROVIDER_MARGIN = 0.72
+# retry is a distinct, low-variance path: keep the chapter ceiling hard while
+# preserving enough token space to finish the scene and its handoff.  This
+# must stay aligned with the calibrated completion margin below; a previous
+# 0.72 override starved a 1033-character scene and caused a false truncation.
+SCENE_BUDGET_RETRY_PROVIDER_MARGIN = 0.86
 # The normal compressed-retry headroom is intentionally generous for prose
 # completion.  The final-scene budget path has already reserved the exact
 # remaining chapter space, so a smaller headroom is needed when a Provider
