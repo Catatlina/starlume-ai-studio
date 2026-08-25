@@ -2,14 +2,15 @@
 > 更新时间：2026-08-25
 > 交接目标：让下一位 AI 从当前真实状态继续完成小说主线和 V7.0 Alpha 开发，不重做 Demo、不丢失已有实现、不把未验收能力写成完成。
 
-## 2026-08-25 整章压缩终稿 `length` 误拒绝修复（本地已验证，待提交/部署）
+## 2026-08-25 整章压缩终稿 `length` 误拒绝修复（`114bee6` 已推送部署；未调用Provider）
 
 - 生产失败样本：workflow run `d74db417-83db-4be9-b57c-6c2dde4b006e` 的 `write_chapter_draft` 首稿3540字、压缩终稿2803字，硬范围2200–3000字，但终稿因 `finish_reason=length` 被无条件拒绝。该节点只执行1次工作流尝试；失败正文随事务回滚，当前没有可核对的真实终稿尾部，不能宣称该2803字样本本身完整。
 - 根因一：压缩预算把实测汉字/token比例强行截到最多1.25，再设置1900 token最低值；DeepSeek即使已压到2800字左右仍容易碰到token上限。根因二：整章生成只接受 `not truncated`，没有区分“残句截断”和“字数已合格且终端语法完整的有界终稿”。
 - 本地修复：`CHAPTER_SINGLE_PASS_GENERATION_VERSION=2.52.0`。DeepSeek首次完整章节按1.50汉字/token换算，2200–3000合同下从2550 token收紧到1834 token；压缩调用使用首稿真实 `candidate_chars/tokens_output` 校准，不再使用1.25上限和1900下限。Gateway只返回真实 `finish_reason`，不在内部扩容重试。
 - 完整性边界：只有第二次 `compress_recover`、字数处于2200–3000、句末为完整终止标点、引号/括号成对闭合时，才允许 `length` 终稿进入现有开场、POV、内容、爽点、字数和V7质量门禁，并记录中等级别warning；逗号/冒号/省略号结尾、残句或未闭合符号仍fail-closed。错误信息新增终端完整性、首尾token预算和实测汉字/token证据。
 - 离线回放：用生产失败形态 `3540 → 2803` 构造确定性回归；完整句尾通过，逗号残句失败。相关生成/可靠性链 `147 passed`，`py_compile`、`git diff --check`通过；没有再次调用真实Provider。
-- 全量边界：本机后端全量以 `--maxfail=1` 在第三个用例即因注册接口503停止，属于本机PostgreSQL/Redis服务未就绪；全量后端不能标记通过。本批尚未commit、push、部署，生产仍为2.51.0。
+- 提交与生产：提交 `114bee6` 已推送到 `origin/agent/publishing-v0.9.2`；生产按精确文件覆盖并重建API/Worker/Beat，未reset/pull生产脏工作树。API和Worker运行时均确认2.52.0、默认DeepSeek预算1834 token；容器内新旧整章回归8项通过，公网healthz确认database/redis/worker均正常。最新源码回滚包为 `/opt/deploy-snapshots/starlume-pre-114bee6-20260825-113044.tar.gz`（102340 bytes），数据库仍只保留最新备份 `backups/novelcraft-20260825-100609.sql.gz`；清理3.286GB无用Docker构建缓存后磁盘为25G/89G、可用60G（30%）。
+- 全量边界：本机后端全量以 `--maxfail=1` 在第三个用例即因注册接口503停止，属于本机PostgreSQL/Redis服务未就绪；全量后端不能标记通过。本批没有调用真实Provider、没有创建小说或章节，也没有证明三章/20章、朱雀或发布闭环。
 
 ## 2026-08-25 首章质量与字数超限根因修复（已提交、推送、部署；真实 Provider 单章通过）
 
