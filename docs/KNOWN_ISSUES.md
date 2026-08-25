@@ -1,5 +1,13 @@
 # Starlume AI 当前已知问题
 
+## 2026-08-25 KI-073 旧版确定性失败修复后仍无安全恢复入口（已修复部署）
+
+- 状态：**生产可用；提交 `3fed1a4` 已推送部署；旧run未自动重试**。
+- 现象：2.52已修复压缩终稿误拒绝，但旧run `d74db417-83db-4be9-b57c-6c2dde4b006e` 的节点仍持久化 `retryable=false`；原retry/restart接口正确阻止原样重跑，却也无法表达“失败原因已被新代码修复”，页面只剩浪费前12个成功节点的全流程重执行。
+- 修复：加入严格的旧错误签名识别，仅当压缩终稿字数已在2200–3000、错误为旧 `compress_recover + provider_truncated=True` 且没有2.52 `terminal_complete` 字段时开放恢复。页面改为专用确认入口，只复用当前run并重试章节；其他确定性失败继续拒绝。恢复审计写入run context，未来失败记录生成版本。
+- 验证：后端2项、前端11项、前端构建与强制开发门禁通过。生产API直接水合该旧run得到 `retry_after_fix.available=true`、`final_chars=2803`；API/Worker 2.52.0、公网前端新资源和healthz正常。
+- 未闭合：部署没有触发Provider；旧run仍为failed/attempt=1。只有用户在页面确认后才能验证真实章节生成结果，因此不能宣称该章已完成、质量已通过或三章/20章已验收。本机PostgreSQL未启动，后端全量仍未标记通过。
+
 ## 2026-08-25 KI-072 字数合格的压缩终稿因 Provider `length` 高频误失败（已修复部署）
 
 - 状态：**生产可用；提交 `114bee6` 已推送并部署，未调用真实Provider**。

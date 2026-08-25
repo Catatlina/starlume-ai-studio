@@ -2,6 +2,16 @@
 > 更新时间：2026-08-25
 > 交接目标：让下一位 AI 从当前真实状态继续完成小说主线和 V7.0 Alpha 开发，不重做 Demo、不丢失已有实现、不把未验收能力写成完成。
 
+## 2026-08-25 旧版确定性章节失败的修复后恢复入口（`3fed1a4` 已推送部署；未调用 Provider）
+
+- 用户页面报错“该失败已判定为确定性契约问题，原样重试不会成功”。对应生产 run `d74db417-83db-4be9-b57c-6c2dde4b006e` 创建于2.52部署前，`write_chapter_draft` 保留旧版 `3540 → 2803`、`minimum=2200,maximum=3000,retry_mode=compress_recover,provider_truncated=True` 错误；节点 `attempt=1`，不是新版再次生成失败。
+- 恢复资格不是通用强制重试：服务端只识别 `write_chapter_draft + failed + retryable=false + generation_contract`，并要求压缩终稿字数已处于合同范围、旧错误不含2.52新增的 `terminal_complete` 证据。真正超长、质量合同、其他节点或2.52新失败继续返回409。
+- `GET /runs/{id}` 为符合条件的旧节点附加只读 `retry_after_fix` 元数据；进度页显示“使用修复版重试章节”，确认框明确只执行失败章节、复用已成功的12个节点，并在该入口存在时隐藏“全流程重执行”。旧浏览器资源需刷新后看到新入口；旧前端调用原 retry API 时也由相同服务端签名保护。
+- 确认后才会调用真实Provider。服务端复用原run，只把当前节点置为pending，通过现有可靠分发器携带BYOK范围；旧错误、版本迁移原因和时间写入 `context.code_fix_retries`，Broker失败会落为 `dispatch_failed`。后续新失败新增 `generation_version=2.52.0` 诊断字段。
+- 本地证据：后端恢复签名/恢复事务2项通过；前端Progress 11项通过；前端生产构建、Python编译、AI真实性、交付声明、强制开发门禁和差异检查通过。全量后端仍因本机PostgreSQL未启动、注册返回503而未标记通过。
+- 提交与生产：`3fed1a4` 已推送 `origin/agent/publishing-v0.9.2`；生产精确覆盖3个运行时文件并重建API/Worker/Beat/Frontend，没有reset/pull脏工作树。公网healthz的database/redis/worker正常，API/Worker版本均为2.52.0，公网前端资源为 `index-DtK9T2j9.js`。
+- 数据边界：部署后旧run仍为 `failed`、节点仍为 `failed`、`attempt=1`，说明没有自动重试或调用Provider；只有用户点击新确认按钮才会生成。未新建小说/章节，未运行三章/20章。只保留源码回滚包 `/opt/deploy-snapshots/starlume-pre-3fed1a4-20260825-115224.tar.gz`（102009 bytes）和数据库备份 `backups/novelcraft-20260825-100609.sql.gz`；清理2.499GB构建缓存后磁盘26G/89G、可用59G（31%）。
+
 ## 2026-08-25 整章压缩终稿 `length` 误拒绝修复（`114bee6` 已推送部署；未调用Provider）
 
 - 生产失败样本：workflow run `d74db417-83db-4be9-b57c-6c2dde4b006e` 的 `write_chapter_draft` 首稿3540字、压缩终稿2803字，硬范围2200–3000字，但终稿因 `finish_reason=length` 被无条件拒绝。该节点只执行1次工作流尝试；失败正文随事务回滚，当前没有可核对的真实终稿尾部，不能宣称该2803字样本本身完整。
