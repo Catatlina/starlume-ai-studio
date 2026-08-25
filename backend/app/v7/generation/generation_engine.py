@@ -94,7 +94,9 @@ logger = logging.getLogger(__name__)
 
 CHAPTER_STATE_TYPE = "chapter"
 SCENE_SERIAL_GENERATION_VERSION = "2.45.0"
-CHAPTER_SINGLE_PASS_GENERATION_VERSION = "2.50.0"
+CHAPTER_SINGLE_PASS_GENERATION_VERSION = "2.51.0"
+CHAPTER_WRITER_PREFERRED_MIN_CHARS = 2350
+CHAPTER_WRITER_PREFERRED_MAX_CHARS = 2550
 # Keep the canonical writer loop intentionally small.  Candidate fan-out and
 # local prose surgery belong to explicit/manual tooling, not the production
 # chapter path; nested retries made the writer see too many competing rules.
@@ -399,6 +401,9 @@ def is_retryable_provider_failure(error: Any) -> bool:
         "cost accounting",
         "accounting failed",
         "ledger",
+        "generation contract violation",
+        "failed generation contract",
+        "quality contract",
     )
     if any(marker in text for marker in permanent_markers):
         return False
@@ -6491,10 +6496,7 @@ class GenerationEngine:
         # complete final scene merely because it fits an extra variance band.
         generation_hard_max_chars = maximum_chapter_chars
         generation_absolute_max_chars = maximum_chapter_chars
-        generation_sequence_max_chars = max(
-            minimum_chapter_chars,
-            generation_hard_max_chars - SCENE_POST_PROCESS_SAFETY_MARGIN_CHARS,
-        )
+        generation_sequence_max_chars = generation_hard_max_chars
         def add_usage(step_ctx: Any, u: dict[str, Any]) -> None:
             usage["tokens_input"] += u.get("tokens_input", 0)
             usage["tokens_output"] += u.get("tokens_output", 0)
@@ -6815,12 +6817,16 @@ class GenerationEngine:
                     )
                     add_usage(step, opening_repair_result.get("usage") or {})
                 except (AIGatewayError, ValueError) as exc:
+                    detail = re.sub(r"\s+", " ", str(exc)).strip()[:240]
                     preflight_failures = [
                         *non_opening_failures,
                         {
                             "code": "opening_repair_failed",
                             "severity": "high",
-                            "message": f"开场契约修复失败：{type(exc).__name__}",
+                            "message": (
+                                f"开场契约修复失败：{type(exc).__name__}"
+                                + (f"：{detail}" if detail else "")
+                            ),
                         },
                     ]
             if preflight_failures:
@@ -7531,6 +7537,14 @@ class GenerationEngine:
             minimum_chars,
             min(int(chapter_max_chars), int(chapter_reader_max_chars)),
         )
+        preferred_min_chars = max(
+            minimum_chars,
+            min(CHAPTER_WRITER_PREFERRED_MIN_CHARS, hard_max_chars),
+        )
+        preferred_max_chars = max(
+            preferred_min_chars,
+            min(CHAPTER_WRITER_PREFERRED_MAX_CHARS, hard_max_chars),
+        )
         usage = {
             "tokens_input": 0,
             "tokens_output": 0,
@@ -7563,7 +7577,9 @@ class GenerationEngine:
         writer_system_prompt = (
             "你是同一本中文网文的稳定正文作者。只输出完整章节正文，不输出标题、提纲、"
             "分析或工程说明。必须把给定节拍写成连续现场，保证爽点、因果、人物行为和章末落点；"
-            f"正文汉字数必须在 {minimum_chars}-{hard_max_chars} 之间，写完结果立即收束。"
+            f"正文汉字数硬范围为 {minimum_chars}-{hard_max_chars}；"
+            f"优先写到 {preferred_min_chars}-{preferred_max_chars} 字，为自然收束留出余量。"
+            "达到优先区间并完成结果后立即结束，不要贴近硬上限。"
             "不能通过删掉关键事件、用省略号或解释性总结来满足字数。"
             + early_chapter_contract
             + third_person_generation_contract()
@@ -7571,12 +7587,14 @@ class GenerationEngine:
         )
         token_limit = min(
             SCENE_PROVIDER_TOKEN_CAP,
-            max(3200, int(hard_max_chars * 1.15)),
+            max(600, min(2600, int(preferred_max_chars))),
         )
         retry_feedback = ""
         retry_prompt_override: str | None = None
         retry_system_prompt = writer_system_prompt
         retry_warnings: list[dict[str, Any]] = []
+        first_candidate_chars = 0
+        retry_mode = "none"
 
         for attempt in range(2):
             prompt = retry_prompt_override or (base_prompt + retry_feedback)
@@ -7599,6 +7617,8 @@ class GenerationEngine:
             add_usage(result)
             candidate = str(result.get("text") or "").strip()
             candidate_chars = chinese_word_count(candidate)
+            if attempt == 0:
+                first_candidate_chars = candidate_chars
             truncated = bool(result.get("truncated")) or str(
                 result.get("finish_reason") or ""
             ).lower() == "length"
@@ -7637,21 +7657,14 @@ class GenerationEngine:
                 "code": "chapter_single_pass_retry",
                 "severity": "low",
                 "message": (
-                    f"第 {attempt + 1} 次整章正文未满足生成合同，已从头重写；"
+                    f"第 {attempt + 1} 次整章正文未满足生成合同；"
                     f"候选 {candidate_chars} 字，目标范围 {minimum_chars}-{hard_max_chars} 字，"
                     f"provider_truncated={truncated}"
                 ),
             })
-            if truncated and candidate_chars <= hard_max_chars:
-                retry_prompt_override = None
-                retry_system_prompt = writer_system_prompt
-                token_limit = min(6000, max(token_limit + 500, int(token_limit * 1.20)))
-                retry_feedback = (
-                    "\n\n【整章重写要求】上一版在 Provider 输出上限处截断。"
-                    f"本次必须在 {minimum_chars}-{hard_max_chars} 字内完成全部节拍、爽点反馈和章末落点；"
-                    "从头完整写，不得续写截断尾部，不得省略关键结果。"
-                )
-            elif truncated or candidate_chars > hard_max_chars:
+            if candidate_chars > hard_max_chars or (
+                truncated and candidate_chars >= max(800, int(minimum_chars * 0.60))
+            ):
                 # A lower token ceiling alone is not a reliable character
                 # ceiling for Chinese Providers: a complete response can
                 # still overshoot after the model has satisfied the story
@@ -7661,6 +7674,7 @@ class GenerationEngine:
                 # truncated candidate may be incomplete at the tail, but it
                 # is still safer to compress/recover its existing event path
                 # than to grant another larger full-chapter budget.
+                retry_mode = "compress_recover" if truncated else "compress"
                 observed_tokens = int(result.get("tokens_output") or 0)
                 if observed_tokens > 0 and candidate_chars > 0:
                     # DeepSeek's completion-token count is not a Chinese
@@ -7669,27 +7683,30 @@ class GenerationEngine:
                     # percentage that can still produce another 3500-char
                     # chapter.  Keep a small completion margin so the model
                     # can finish the final consequence and hook.
-                    observed_chars_per_token = candidate_chars / observed_tokens
-                    calibrated_tokens = int(
-                        hard_max_chars / max(0.75, observed_chars_per_token) * 0.94
+                    observed_chars_per_token = max(
+                        1.0,
+                        min(1.25, candidate_chars / observed_tokens),
                     )
+                    calibrated_tokens = int(
+                        preferred_max_chars / observed_chars_per_token * 0.95
+                    ) + 100
                 else:
-                    calibrated_tokens = int(hard_max_chars * 0.80)
-                # The ratio estimates the compact size, but the compressed
-                # draft still needs enough tokens to finish its consequence
-                # and closing hook.  The observed 2400-token pass ended at
-                # 2794 chars with finish_reason=length, so retain a bounded
-                # 2600-token completion floor instead of accepting a cut-off
-                # chapter.
-                token_limit = max(2600, min(3000, calibrated_tokens + 200))
+                    calibrated_tokens = int(preferred_max_chars * 0.96)
+                token_limit = max(1900, min(2500, calibrated_tokens))
                 retry_system_prompt = (
                     "你是中文网文的终稿压缩编辑。只输出压缩后的完整正文，不输出标题、"
                     "分析、提纲或修改说明。上一版正文已经完成故事事件；你的任务是删除冗余，"
                     "让终稿在指定字数内自然收束，不能重新创作一套故事。"
                 )
                 retry_prompt_override = (
-                    "【整章预算收束要求】上一版完整但超出内部章节上限。"
-                    f"本次压缩目标为 2200-{hard_max_chars} 字，并严格收束在 {minimum_chars}-{hard_max_chars} 字；"
+                    "【整章预算收束要求】"
+                    + (
+                        "上一版在 Provider 输出上限处截断，需要沿已有事件路径补齐并收束。"
+                        if truncated
+                        else "上一版完整但超出章节上限，需要在不改因果的前提下压缩。"
+                    )
+                    + f"本次优先收束到 {preferred_min_chars}-{preferred_max_chars} 字，"
+                    f"硬范围仍为 {minimum_chars}-{hard_max_chars} 字；"
                     + (
                         "上一版可能在 Provider 输出上限处截断；以已有事件路径为底稿，"
                         "补齐已经规划好的结果和章末钩子，但不得新增支线或改变因果；"
@@ -7704,20 +7721,32 @@ class GenerationEngine:
                     f"{candidate}\n"
                     "【上一版完整正文结束】"
                 )
-            else:
+            elif truncated:
+                retry_mode = "fresh_complete"
                 retry_prompt_override = None
                 retry_system_prompt = writer_system_prompt
-                token_limit = min(6000, max(token_limit + 400, int(token_limit * 1.10)))
+                token_limit = min(2600, max(token_limit, int(preferred_max_chars)))
+                retry_feedback = (
+                    "\n\n【整章完成要求】上一版过早截断，不能续写残缺尾部。"
+                    f"本次从头完整写到 {preferred_min_chars}-{preferred_max_chars} 字，"
+                    "必须完成全部节拍、爽点反馈和章末落点，不得省略关键结果。"
+                )
+            else:
+                retry_mode = "expand"
+                retry_prompt_override = None
+                retry_system_prompt = writer_system_prompt
+                token_limit = min(2600, max(token_limit, int(preferred_max_chars)))
                 retry_feedback = (
                     "\n\n【整章完成要求】上一版过短，不能用提纲或总结补长度。"
-                    f"本次从头完整写到 {minimum_chars}-{hard_max_chars} 字，补足尚未完成的目标、"
+                    f"本次从头完整写到 {preferred_min_chars}-{preferred_max_chars} 字，补足尚未完成的目标、"
                     "阻碍、选择、现场结果和章末压力，保持连续事件推进。"
                 )
 
         raise AIGatewayError(
-            "single-pass chapter failed generation contract after bounded retry: "
-            f"candidate={candidate_chars},minimum={minimum_chars},maximum={hard_max_chars},"
-            f"provider_truncated={truncated}"
+            "single-pass chapter generation contract violation after bounded retry: "
+            f"first_candidate={first_candidate_chars},final_candidate={candidate_chars},"
+            f"minimum={minimum_chars},maximum={hard_max_chars},"
+            f"retry_mode={retry_mode},provider_truncated={truncated}"
         )
 
     @staticmethod

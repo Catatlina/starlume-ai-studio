@@ -51,6 +51,7 @@ from app.v7.quality.opening_variation import (
     opening_prompt_block,
     select_opening_plan,
 )
+from app.v7.generation.generation_engine import is_retryable_provider_failure
 from app.services.planning_contract import (
     creative_bible_section_defects,
     creative_bible_strategy_section_defects,
@@ -58,6 +59,7 @@ from app.services.planning_contract import (
     mechanic_contract_guidance,
     mechanic_families_for_idea,
     validate_longform_contract,
+    validate_chapter_outline_user_contract,
     validate_volume_plan_contract,
 )
 
@@ -1256,6 +1258,11 @@ def _persist_canonical_bootstrap_result(
         "provenance": result.get("review_provenance") or result.get("provenance") or {},
         "v6_content_id": result.get("v6_content_id"),
     }
+    if v7_status in {"needs_review", "needs_rewrite"}:
+        output.update({
+            "retryable": False,
+            "failure_kind": "quality_contract",
+        })
     if v7_status == "completed":
         delegated_statuses = ["succeeded"] * len(delegated_nodes)
     elif v7_status == "pending_approval":
@@ -1573,7 +1580,17 @@ def execute_bootstrap(self, run_id: str, start_key: str = "plan_idea",
                 )
                 break
             except OutputValidationError as exc:
-                _mark_node(run_id, node_key, "failed", str(exc)[:500])
+                _mark_node(
+                    run_id,
+                    node_key,
+                    "failed",
+                    str(exc)[:500],
+                    output={
+                        "retryable": False,
+                        "failure_kind": "output_validation",
+                        "error": str(exc)[:300],
+                    },
+                )
                 _record_bootstrap_event(
                     run_id,
                     "canonical_v7.invalid_output",
@@ -1582,14 +1599,28 @@ def execute_bootstrap(self, run_id: str, start_key: str = "plan_idea",
                 )
                 return {"status": "invalid_output", "node_key": node_key}
             except Exception as exc:
-                _mark_node(run_id, node_key, "failed", str(exc)[:500])
+                retryable = is_retryable_provider_failure(exc)
+                failure_output = {
+                    "retryable": retryable,
+                    "failure_kind": "provider_transient" if retryable else "generation_contract",
+                    "error": str(exc)[:300],
+                }
+                _mark_node(
+                    run_id,
+                    node_key,
+                    "pending_provider" if retryable else "failed",
+                    str(exc)[:500],
+                    output=failure_output,
+                )
                 _record_bootstrap_event(
                     run_id,
-                    "canonical_v7.failed",
+                    "canonical_v7.retrying" if retryable else "canonical_v7.non_retryable_failure",
                     node_key=node_key,
-                    payload={"error": str(exc)[:300]},
+                    payload=failure_output,
                 )
-                raise self.retry(exc=exc, countdown=5)
+                if retryable:
+                    raise self.retry(exc=exc, countdown=5)
+                return {"status": "non_retryable_failure", "node_key": node_key}
 
         # ── Build node execution context ───────────────────────────────
         run_context = run["context"] if isinstance(run["context"], dict) else {}
@@ -1612,7 +1643,17 @@ def execute_bootstrap(self, run_id: str, start_key: str = "plan_idea",
             try:
                 run_context = _assemble_bootstrap_writing_context(novel_id, run_context)
             except OutputValidationError as exc:
-                _mark_node(run_id, node_key, "failed", str(exc))
+                _mark_node(
+                    run_id,
+                    node_key,
+                    "failed",
+                    str(exc),
+                    output={
+                        "retryable": False,
+                        "failure_kind": "output_validation",
+                        "error": str(exc)[:300],
+                    },
+                )
                 _record_bootstrap_event(
                     run_id,
                     "node.failed",
@@ -1867,16 +1908,17 @@ def execute_bootstrap(self, run_id: str, start_key: str = "plan_idea",
                     )
             else:
                 quality_feedback = ""
-                quality_attempts = (
-                    3
-                    if task_type in {
-                        "write_chapter_draft",
-                        "write_polish",
-                        "final_humanize",
-                        "blueprint_volume_plan",
-                    }
-                    else 1
-                )
+                if task_type == "blueprint_chapter_outline":
+                    quality_attempts = 2
+                elif task_type in {
+                    "write_chapter_draft",
+                    "write_polish",
+                    "final_humanize",
+                    "blueprint_volume_plan",
+                }:
+                    quality_attempts = 3
+                else:
+                    quality_attempts = 1
                 for quality_attempt in range(1, quality_attempts + 1):
                     quality_directive, quality_metadata, payoff_contract = _quality_directive_for_chapter(run_context)
                     variables = {
@@ -1940,6 +1982,12 @@ def execute_bootstrap(self, run_id: str, start_key: str = "plan_idea",
                         )
                     elif task_type == "blueprint_volume_plan":
                         quality_feedback = _volume_plan_feedback(output, run_context)
+                    elif task_type == "blueprint_chapter_outline":
+                        defects = validate_chapter_outline_user_contract(
+                            output,
+                            idea=str(run_context.get("idea") or ""),
+                        )
+                        quality_feedback = "；".join(defects)
                     else:
                         break
                     if not quality_feedback:
@@ -1955,24 +2003,66 @@ def execute_bootstrap(self, run_id: str, start_key: str = "plan_idea",
                                     payload={"reason": "budget_exceeded"})
             return {"status": "pending_budget", "node_key": node_key}
         except OutputValidationError as exc:
-            _mark_node(run_id, node_key, "failed", str(exc))
+            _mark_node(
+                run_id,
+                node_key,
+                "failed",
+                str(exc),
+                output={
+                    "retryable": False,
+                    "failure_kind": "output_validation",
+                    "error": str(exc)[:300],
+                },
+            )
             _record_bootstrap_event(run_id, "node.failed", node_key=node_key,
                                     payload={"reason": "invalid_output"})
             return {"status": "invalid_output", "node_key": node_key}
         except ProviderError as exc:
-            # Provider failures are retryable through Celery (max_retries=3).
-            # The gateway already exhausted its internal backoff before
-            # re-raising, so we let the whole run retry rather than failing it
-            # silently. Once Celery exhausts its retries this becomes terminal.
-            _mark_node(run_id, node_key, "pending_provider", f"provider error: {exc}"[:500])
-            _record_bootstrap_event(run_id, "node.retrying", node_key=node_key,
-                                    payload={"reason": "provider_error", "detail": str(exc)[:200]})
-            raise self.retry(exc=exc, countdown=5)
+            retryable = is_retryable_provider_failure(exc)
+            failure_output = {
+                "retryable": retryable,
+                "failure_kind": "provider_transient" if retryable else "provider_configuration",
+                "error": str(exc)[:300],
+            }
+            _mark_node(
+                run_id,
+                node_key,
+                "pending_provider" if retryable else "failed",
+                f"provider error: {exc}"[:500],
+                output=failure_output,
+            )
+            _record_bootstrap_event(
+                run_id,
+                "node.retrying" if retryable else "node.non_retryable_failure",
+                node_key=node_key,
+                payload={"reason": "provider_error", **failure_output},
+            )
+            if retryable:
+                raise self.retry(exc=exc, countdown=5)
+            return {"status": "provider_failure", "node_key": node_key}
         except Exception as exc:
-            _mark_node(run_id, node_key, "failed", str(exc))
-            _record_bootstrap_event(run_id, "node.failed", node_key=node_key,
-                                    payload={"error": str(exc)[:200]})
-            raise self.retry(exc=exc, countdown=5)
+            retryable = is_retryable_provider_failure(exc)
+            failure_output = {
+                "retryable": retryable,
+                "failure_kind": "provider_transient" if retryable else "deterministic_failure",
+                "error": str(exc)[:300],
+            }
+            _mark_node(
+                run_id,
+                node_key,
+                "pending_provider" if retryable else "failed",
+                str(exc),
+                output=failure_output,
+            )
+            _record_bootstrap_event(
+                run_id,
+                "node.retrying" if retryable else "node.non_retryable_failure",
+                node_key=node_key,
+                payload=failure_output,
+            )
+            if retryable:
+                raise self.retry(exc=exc, countdown=5)
+            return {"status": "non_retryable_failure", "node_key": node_key}
 
         # ── Persist output + track budget ──────────────────────────────
         budget_info = _estimate_node_cost(run_id, node_key, output)
@@ -1981,7 +2071,17 @@ def execute_bootstrap(self, run_id: str, start_key: str = "plan_idea",
         try:
             _persist_output(run_id, node_key, task_type or "", output, novel_id, project_id)
         except OutputValidationError as exc:
-            _mark_node(run_id, node_key, "failed", str(exc))
+            _mark_node(
+                run_id,
+                node_key,
+                "failed",
+                str(exc),
+                output={
+                    "retryable": False,
+                    "failure_kind": "output_validation",
+                    "error": str(exc)[:300],
+                },
+            )
             _record_bootstrap_event(run_id, "node.failed", node_key=node_key,
                                     payload={"reason": "invalid_persisted_output", "detail": str(exc)[:200]})
             return {"status": "invalid_output", "node_key": node_key}
@@ -2286,12 +2386,25 @@ def confirm_human(run_id: str, selected_title: str,
 # Node marking + output persistence
 # ═══════════════════════════════════════════════════════════════════════════
 
-def _mark_node(run_id: str, node_key: str, status: str, error: str) -> None:
+def _mark_node(
+    run_id: str,
+    node_key: str,
+    status: str,
+    error: str,
+    *,
+    output: dict[str, Any] | None = None,
+) -> None:
     db = connect()
-    db.execute(
-        "UPDATE run_nodes SET status = %s, error = %s, finished_at = now() WHERE run_id = %s AND node_key = %s",
-        (status, error, run_id, node_key),
-    )
+    if output is None:
+        db.execute(
+            "UPDATE run_nodes SET status = %s, error = %s, finished_at = now() WHERE run_id = %s AND node_key = %s",
+            (status, error, run_id, node_key),
+        )
+    else:
+        db.execute(
+            "UPDATE run_nodes SET status = %s, error = %s, output = %s, finished_at = now() WHERE run_id = %s AND node_key = %s",
+            (status, error, encode(output), run_id, node_key),
+        )
     db.execute(
         "UPDATE workflow_runs SET status = %s, current_node_key = %s, updated_at = now() WHERE id = %s",
         (status, node_key, run_id),

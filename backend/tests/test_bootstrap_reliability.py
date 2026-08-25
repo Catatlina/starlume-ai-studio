@@ -79,6 +79,112 @@ def test_invalid_or_empty_bootstrap_output_is_not_persisted_or_succeeded(
     assert not any(params and params[0] == "succeeded" for sql, params in db.statements if sql.startswith("UPDATE"))
 
 
+def test_deterministic_chapter_contract_failure_does_not_retry_the_whole_workflow(monkeypatch):
+    import json
+
+    from app.v7.generation.generation_engine import AIGatewayError
+    from app.workers import tasks
+
+    db = _TaskDb()
+    monkeypatch.setattr(tasks, "connect", lambda: db)
+    monkeypatch.setattr(tasks.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        tasks,
+        "_run_canonical_v7_task",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AIGatewayError(
+            "single-pass chapter generation contract violation after bounded retry: "
+            "first_candidate=3994,final_candidate=3300,minimum=2200,maximum=3000"
+        )),
+    )
+
+    result = tasks.execute_bootstrap.run("run-1", "write_chapter_draft")
+
+    assert result == {"status": "non_retryable_failure", "node_key": "write_chapter_draft"}
+    assert any(
+        params and params[0] == "failed" and json.loads(params[2])["retryable"] is False
+        for sql, params in db.statements
+        if "UPDATE run_nodes" in sql and "output = %s" in sql
+    )
+
+
+def test_explicit_chapter_promise_gets_one_planning_retry_before_prose(monkeypatch):
+    from app.workers import tasks
+
+    idea = "第一章就是军事行动，装甲车撞开午门，三分钟控制紫禁城，慈禧被架起来。"
+    db = _TaskDb()
+    original_execute = db.execute
+
+    def execute(sql, params=()):
+        compact = " ".join(sql.split())
+        if "SELECT * FROM workflow_runs" in compact:
+            return _Cursor({
+                "id": "run-1",
+                "project_id": "project-1",
+                "novel_id": "novel-1",
+                "context": {"idea": idea},
+            })
+        if "SELECT * FROM run_nodes" in compact and params[1] != "blueprint_chapter_outline":
+            return _Cursor(None)
+        return original_execute(sql, params)
+
+    db.execute = execute
+    calls = []
+    persisted = []
+
+    def chapter(seq, outline, beats, **extra):
+        return {
+            "volume": 1,
+            "seq": seq,
+            "title": f"第{seq}章",
+            "outline": outline,
+            "beats": beats,
+            "foreshadow_plant": [],
+            "foreshadow_reap": [],
+            "function_type": "开篇吸引" if seq == 1 else "冲突升级",
+            "chapter_goal": outline,
+            "reader_expectation": "下一步结果",
+            "payoff_contract": {},
+            **extra,
+        }
+
+    bad = {"chapter_outlines": [
+        chapter(1, "确认时空锚点并准备行动", ["测试锚点", "制定计划"]),
+        chapter(2, "装甲车撞开午门并控制紫禁城", ["撞开午门", "控制紫禁城"]),
+        chapter(3, "处理行动余波", ["清点结果"]),
+    ]}
+    good = {"chapter_outlines": [
+        chapter(
+            1,
+            "装甲车撞开午门，部队三分钟控制紫禁城，慈禧被士兵架起。",
+            ["装甲车撞开午门", "控制紫禁城", "架起慈禧"],
+            delivery_state="completed_in_chapter",
+            must_deliver=["撞开午门", "控制紫禁城", "架起慈禧"],
+            visible_result="紫禁城被控制，慈禧被架起",
+        ),
+        chapter(2, "处理城内反应", ["确认新压力"]),
+        chapter(3, "推进下一目标", ["建立新冲突"]),
+    ]}
+
+    def complete(**kwargs):
+        calls.append(kwargs)
+        return bad if len(calls) == 1 else good
+
+    monkeypatch.setattr(tasks, "connect", lambda: db)
+    monkeypatch.setattr(tasks.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(tasks, "complete", complete)
+    monkeypatch.setattr(tasks, "_enrich_blueprint_context", lambda context, _novel_id: context)
+    monkeypatch.setattr(tasks, "_create_checkpoint", lambda *_args, **_kwargs: "")
+    monkeypatch.setattr(tasks, "_persist_output", lambda *_args: persisted.append(_args[3]))
+
+    result = tasks.execute_bootstrap.run("run-1", "blueprint_chapter_outline")
+
+    assert result["status"] == "error"
+    assert len(calls) == 2
+    assert calls[0]["variables"]["quality_retry_feedback"] == ""
+    assert "不得延后" in calls[1]["variables"]["quality_retry_feedback"]
+    assert persisted[0]["chapter_outlines"][0]["delivery_state"] == "completed_in_chapter"
+
+
 def test_mock_route_is_rejected(monkeypatch):
     from app import gateway
     from app.gateway import ProviderError

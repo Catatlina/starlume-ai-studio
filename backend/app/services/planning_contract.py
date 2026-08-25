@@ -26,6 +26,126 @@ _WORD_RANGE_RE = re.compile(
     r"(\d+(?:\.\d+)?)\s*[-—至]\s*(\d+(?:\.\d+)?)\s*万字"
 )
 
+_EXPLICIT_CHAPTER_RE = re.compile(
+    r"第\s*(?P<seq>[一二三四五六七八九十百零〇两\d]+)\s*章"
+    r"(?P<contract>[^。！？!?\n]{4,220})"
+)
+_CHINESE_DIGITS = {
+    "零": 0, "〇": 0, "一": 1, "二": 2, "两": 2, "三": 3,
+    "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9,
+}
+_DELIVERY_DEFERRED_RE = re.compile(r"(?:准备|计划|决定|打算|即将|随后将|下一章|后续|第二章|铺垫)")
+_DELIVERY_COMPLETED_RE = re.compile(
+    r"(?:完成|兑现|拿下|控制|攻占|击败|抓住|俘获|架起|撞开|抵达|获得|救出|公开|当场)"
+)
+
+
+def _chapter_number(value: str) -> int | None:
+    raw = str(value or "").strip()
+    if raw.isdigit():
+        return int(raw)
+    if raw == "十":
+        return 10
+    if "十" in raw:
+        left, right = raw.split("十", 1)
+        tens = _CHINESE_DIGITS.get(left, 1) if left else 1
+        ones = _CHINESE_DIGITS.get(right, 0) if right else 0
+        return tens * 10 + ones
+    if len(raw) == 1:
+        return _CHINESE_DIGITS.get(raw)
+    return None
+
+
+def _contract_segments(text: str) -> list[str]:
+    compact = re.sub(r"\s+", "", str(text or ""))
+    compact = re.sub(r"^(?:就是|就要|必须|直接|要写|写|需|需要)", "", compact)
+    return [
+        item.strip("，,；;：:")
+        for item in re.split(r"[，,；;：:]", compact)
+        if len(item.strip("，,；;：:")) >= 4
+    ]
+
+
+def _bigram_overlap(source: str, candidate: str) -> float:
+    source_chars = re.sub(r"[^\u4e00-\u9fffA-Za-z0-9]", "", source)
+    candidate_chars = re.sub(r"[^\u4e00-\u9fffA-Za-z0-9]", "", candidate)
+    if not source_chars or not candidate_chars:
+        return 0.0
+    if source_chars in candidate_chars:
+        return 1.0
+    grams = {source_chars[index:index + 2] for index in range(max(1, len(source_chars) - 1))}
+    candidate_grams = {
+        candidate_chars[index:index + 2]
+        for index in range(max(1, len(candidate_chars) - 1))
+    }
+    return len(grams & candidate_grams) / max(1, len(grams))
+
+
+def validate_chapter_outline_user_contract(
+    output: dict[str, Any],
+    *,
+    idea: str,
+) -> list[str]:
+    """Keep explicit ``第N章`` promises in the chapter the author named.
+
+    Prompt wording alone allowed a planner to turn a promised first-chapter
+    result into "decide/prepare" and move the actual event to chapter two.
+    This validator checks visible chapter output, not an echoed contract field,
+    and returns focused feedback before prose generation begins.
+    """
+    contracts: list[tuple[int, str]] = []
+    for match in _EXPLICIT_CHAPTER_RE.finditer(str(idea or "")):
+        seq = _chapter_number(match.group("seq"))
+        if seq is not None:
+            contracts.append((seq, match.group("contract").strip()))
+    if not contracts:
+        return []
+
+    outlines = output.get("chapter_outlines") if isinstance(output, dict) else None
+    outlines = outlines if isinstance(outlines, list) else []
+    defects: list[str] = []
+    for seq, contract in contracts:
+        chapter = next(
+            (
+                item for item in outlines
+                if isinstance(item, dict)
+                and _chapter_number(str(item.get("seq") or "")) == seq
+            ),
+            None,
+        )
+        if chapter is None:
+            defects.append(f"第 {seq} 章缺失，无法兑现用户明确指定的章节事件：{contract[:100]}")
+            continue
+        delivery_text = "；".join(
+            str(value)
+            for value in (
+                chapter.get("outline"),
+                chapter.get("beats"),
+                chapter.get("chapter_goal"),
+                chapter.get("must_deliver"),
+                chapter.get("visible_result"),
+                chapter.get("payoff_contract"),
+            )
+            if value not in (None, "", [], {})
+        )
+        segments = _contract_segments(contract)
+        matched = sum(_bigram_overlap(segment, delivery_text) >= 0.42 for segment in segments)
+        coverage = matched / max(1, len(segments))
+        delivery_state = str(chapter.get("delivery_state") or "").strip().lower()
+        explicitly_deferred = delivery_state in {
+            "planned_for_later", "deferred", "setup_only", "pending"
+        }
+        deferred_without_result = (
+            _DELIVERY_DEFERRED_RE.search(delivery_text) is not None
+            and _DELIVERY_COMPLETED_RE.search(delivery_text) is None
+        )
+        if explicitly_deferred or deferred_without_result or coverage < 0.60:
+            defects.append(
+                f"第 {seq} 章必须当章兑现用户明确承诺，不得延后为准备/计划；"
+                f"当前可见事件覆盖 {matched}/{max(1, len(segments))}：{contract[:120]}"
+            )
+    return defects
+
 
 _CREATIVE_BIBLE_REQUIRED_SECTIONS: tuple[tuple[str, ...], ...] = (
     ("黄金三章", "开局节奏"),

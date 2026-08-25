@@ -365,6 +365,10 @@ class _BlueprintChapterOutlineItem(_LenientOutput):
     chapter_goal: str = Field(min_length=1)
     reader_expectation: str = Field(min_length=1)
     payoff_contract: dict[str, Any] = Field(default_factory=dict)
+    explicit_user_contract: str = Field(default="")
+    must_deliver: list[str] = Field(default_factory=list)
+    delivery_state: str = Field(default="")
+    visible_result: str = Field(default="")
 
 
 class _BlueprintChapterOutlineOutput(_LenientOutput):

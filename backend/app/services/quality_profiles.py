@@ -32,6 +32,8 @@ from ..v7.quality.readability_contract import render_readability_plan
 QUALITY_PROFILE_SCHEMA_VERSION = "webnovel-quality-profile-v1"
 
 READER_CHAPTER_BUDGET_SCHEMA_VERSION = "reader-chapter-budget-v1"
+READER_CHAPTER_MIN_CHARS = 2200
+READER_CHAPTER_MAX_CHARS = 3000
 
 _PLATFORM_ALIASES = {
     "fanqie": "fanqie",
@@ -163,19 +165,21 @@ def reader_chapter_budget(
 
     requested = max(1, int(requested_target or 3000))
     short_override = requested < low
-    effective_target = requested if short_override else min(requested, high)
+    effective_target = (
+        requested
+        if short_override
+        else min(max(requested, READER_CHAPTER_MIN_CHARS), high)
+    )
     if short_override:
         minimum = max(600, int(effective_target * 0.72))
         maximum = max(minimum + 200, int(effective_target * 1.65))
     else:
-        # A chapter may breathe slightly beyond the report baseline, but it
-        # must not expand to the platform's 5,000-character ceiling merely to
-        # satisfy a nominal target.
-        minimum = max(600, int(effective_target * 0.72), int(low * 0.90))
-        maximum = max(
-            minimum + 200,
-            min(high + 300, int(effective_target * 1.12)),
-        )
+        # The author-facing product contract is one complete 2200-3000-char
+        # chapter.  The profile overlap remains the preferred writing target,
+        # but it must not silently weaken the accepted minimum to 1944 or
+        # invent a 2968-char internal ceiling that disagrees with the UI.
+        minimum = READER_CHAPTER_MIN_CHARS
+        maximum = READER_CHAPTER_MAX_CHARS
 
     return {
         "schema_version": READER_CHAPTER_BUDGET_SCHEMA_VERSION,
@@ -186,7 +190,7 @@ def reader_chapter_budget(
         "minimum_chars": minimum,
         "maximum_chars": maximum,
         "short_target_override": short_override,
-        "rationale": "读者预算优先于平台上限；完成节拍和章末钩子后立即收束",
+        "rationale": "完整正文统一验收 2200-3000 字；推荐区间只控制写作落点，完成节拍和章末钩子后立即收束",
     }
 
 

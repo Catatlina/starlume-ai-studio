@@ -146,6 +146,9 @@ def test_provider_failure_is_retryable_but_missing_key_is_not():
     assert is_retryable_provider_failure(
         "provider succeeded but V7 cost accounting failed"
     ) is False
+    assert is_retryable_provider_failure(
+        "single-pass chapter generation contract violation after bounded retry"
+    ) is False
 
 
 def test_cancelled_batch_slot_skips_provider_before_generation(monkeypatch):
@@ -200,6 +203,8 @@ def test_canonical_task_allows_complete_slow_v7_chain():
 
 
 def test_canonical_bootstrap_keeps_quality_rejection_actionable(monkeypatch):
+    import json
+
     from app.workers import tasks
 
     class Cursor:
@@ -249,6 +254,9 @@ def test_canonical_bootstrap_keeps_quality_rejection_actionable(monkeypatch):
     assert node_updates[0][1][0] == "needs_review"
     assert all(statement[1][0] in {"needs_review", "skipped"} for statement in node_updates)
     assert "草稿已保存" in str(node_updates[0][1][3])
+    decoded_outputs = [json.loads(statement[1][1]) for statement in node_updates]
+    assert all(output["retryable"] is False for output in decoded_outputs)
+    assert decoded_outputs[0]["failure_kind"] == "quality_contract"
 
 
 def test_v7_gateway_accepts_short_lived_provider_override():

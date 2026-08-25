@@ -205,6 +205,43 @@ describe("创作进度门禁", () => {
     );
   });
 
+  it("质量待重写不是可重试故障，页面不再诱导重复调用模型", () => {
+    render(
+      <Progress
+        run={{
+          id: "run-quality",
+          status: "needs_review",
+          current_node_key: null,
+          context: {
+            canonical_generation: {
+              status: "needs_review",
+              blocked_reason: "开场没有兑现章节承诺",
+            },
+          },
+          nodes: [{
+            node_key: "write_chapter_draft",
+            kind: "agent",
+            agent: "deepseek",
+            title: "章节初稿",
+            status: "needs_review",
+            output: { retryable: false, failure_kind: "quality_contract" },
+            error: "质量门未通过",
+            attempt: 1,
+          }],
+        }}
+        novel={null}
+        onConfirm={vi.fn()}
+        onRegenerateTitles={vi.fn()}
+        onNewRun={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("开场没有兑现章节承诺")).toBeTruthy();
+    expect(screen.getByText("已停止自动重试")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /重试此步骤/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /重试待处理/ })).toBeNull();
+  });
+
   it("空状态展示开始创作按钮，点击后新建 run 并通过 onNewRun 切换", async () => {
     const { apiRaw } = await import("../lib/api");
     const onNewRun = vi.fn().mockResolvedValue(undefined);

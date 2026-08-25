@@ -79,7 +79,7 @@ _ENVIRONMENT_RE = re.compile(
     r"(?:雨|雾|风|雪|潮气|热浪|冷气|天光|灯光|地面|楼道|院子|街道|海面|山谷).{0,20}(?:压|卷|散|落|亮|暗|晃|漫|逼|涌|变)"
 )
 _ACTION_RE = re.compile(
-    r"(?:抬手|转身|推开|推门|进门|冲出|拔出|按住|抓住|扣下|抵住|迈步|迈进|抬脚|走近|靠近|拎起|握紧|扑|躲|拦|挡|撕|砸|掏出|取出|站起|站到|跪|回头|走向|往.{0,8}走|上楼|下楼|决定|开口|划|扫|扫过|擦|拂过|踩|弯腰|俯身|抬头|伸手|捡起|拾起|掀|扯|提|拉|拽|踢|翻|掩|靠|贴|收回|压住|放下|抓起|捏|拍|丢|摔|蹲下|退后|退开|直起|停住|停下|顿住|顿了一下|摸到|碰到|挪|移|撬|踮)"
+    r"(?:抬手|转身|推开|推门|进门|冲出|拔出|按住|按下|抓住|扣下|抵住|迈步|迈进|抬脚|走近|靠近|拎起|握紧|扑|躲|拦|挡|撕|砸|掏出|取出|站起|站到|跪|回头|走向|往.{0,8}走|上楼|下楼|决定|开口|划|扫|扫过|擦|拂过|踩|弯腰|俯身|抬头|抬眼|伸手|捡起|拾起|掀|扯|提|拉|拽|踢|翻|掩|靠|贴|收回|压住|放下|抓起|捏|拍|丢|摔|蹲下|退后|退开|直起|停住|停下|顿住|顿了一下|摸到|碰到|触碰|挪|移|撬|踮|拧开|灌(?:了|下)?|搭上|敲下|敲击)"
 )
 
 
@@ -231,7 +231,7 @@ def opening_prompt_block(plan: dict[str, Any] | None) -> str:
     directive = plan.get("directive") or OPENING_MODE_DIRECTIVES.get(mode, "")
     recent = "、".join(str(item) for item in (plan.get("forbidden_recent_modes") or [])) or "无"
     first_sentence_directive = {
-        "action": "首句必须直接出现正在发生的动作、决定或争执，并造成一个可见变化。",
+        "action": "第一段前160字内必须出现正在发生的动作、决定或争执，并造成一个可见变化；允许一句极短现场锚点。",
         "dialogue": "首句必须直接是带目的的对白或对白冲突，不得先写环境和日常动作。",
         "object": "首句必须直接出现具体物件及其异常、变化或结果；后文的动作不能代替物件开场。",
         "external_event": "首句必须直接出现外部事件、来客、警报、消息或现场变化，并迫使人物回应。",
@@ -266,13 +266,13 @@ def inspect_opening(
     # within the first few sentences.  Requiring the first sentence itself to
     # contain an action made the fallback repair spend another Provider call
     # and then reject an otherwise readable, fact-preserving chapter.  Keep
-    # this bounded to an initially unclassified opening and an action within
-    # the first 160 characters; static openings and later actions remain hard
+    # this bounded to a non-dialogue/non-body opening and an action within the
+    # first 160 characters; static openings and later actions remain hard
     # mismatches.
     early_action = _ACTION_RE.search(sample[:220])
     if (
         requested == "action"
-        and observed == "unknown"
+        and observed not in {"dialogue", "body_sensation"}
         and early_action is not None
         and early_action.start() <= 160
     ):
@@ -290,7 +290,7 @@ def inspect_opening(
         flags.append({
             "code": "opening_mode_mismatch",
             "severity": "high",
-            "message": f"指定开场类型为 {requested}，但首句实际呈现为 {observed}",
+            "message": f"指定开场类型为 {requested}，但前160字实际呈现为 {observed}",
             "evidence": first_sentence[:120],
         })
 

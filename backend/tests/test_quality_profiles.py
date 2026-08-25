@@ -53,6 +53,7 @@ def test_reader_chapter_budget_uses_reader_range_not_platform_ceiling():
 
     assert budget["recommended_range"] == [2000, 2700]
     assert budget["target_word_count"] == 2700
+    assert budget["minimum_chars"] == 2200
     assert budget["maximum_chars"] == 3000
     assert budget["maximum_chars"] < 5000
     assert "reader_chapter_budget" in quality_profile_metadata(profile)

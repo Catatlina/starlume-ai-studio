@@ -17,7 +17,7 @@ def _result(**overrides):
         "passed_review": True,
         "quality_gate": {"passed": True, "failures": []},
         "continuity": {"passed": True, "issues": []},
-        "reader_chapter_budget": {"minimum_chars": 1944, "maximum_chars": 3000},
+        "reader_chapter_budget": {"minimum_chars": 2200, "maximum_chars": 3000},
         "generation_quality": {"passed": True, "generation_hard_max_chars": 3000},
         "review_score": 91.0,
     }

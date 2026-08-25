@@ -2046,7 +2046,7 @@ $plan_output
 
 输出 JSON: {"total_word_target":1500000,"volume_word_targets":[187500,187500,187500,187500,187500,187500,187500,187500],"volumes":[{"number":1,"title":"卷名","arc":"弧线","start_chapter":1,"end_chapter":62,"word_target":187500,"climax":"高潮","hook":"钩子"}],"chapter_tree":[{"volume":1,"start_chapter":1,"end_chapter":62}]}"""),
 
-    ("bootstrap.blueprint_chapter_outline", "1.3.0", "deepseek",
+    ("bootstrap.blueprint_chapter_outline", "1.4.0", "deepseek",
      """你是细纲策划师。请为《$selected_title》第一卷生成前 10 章逐章细纲。
 
 用户原始需求：$idea
@@ -2059,6 +2059,7 @@ $plan_output
 创作圣经：$creative_bible
 
 平台/题材质量策略：$quality_profile_directive
+上次确定性门禁反馈：$quality_retry_feedback
 
 要求（AI_NovelGenerator 章法）：
 1. 每章含：volume、seq（章节序号）、title（章名）、outline（80-150 字梗概：目标→阻碍→行动→代价→转折）、beats（3-5 个节拍）、foreshadow_plant（本章埋的伏笔，可空）、foreshadow_reap（本章回收的伏笔，可空）以及 payoff_contract（reader_promise/pressure/active_choice/payoff_type/visible_result/witness_reaction/cost/next_pressure/setup_refs）。爽点不等于每章打脸，也可以是揭示、资源、关系变化、逃生或规则利用，但必须有可见结果和下一压力
@@ -2079,13 +2080,17 @@ $plan_output
    - 越级打脸结构：反派嚣张挑衅→众人不看好主角→主角隐藏实力→主角出手碾压→全场哗然/反派崩溃→更大的反派出现
 5. 严格核对年代顺序：重生前事件必须发生在用户指定的未来年份，醒来后才进入过去年份；不得把两个年代混写
 6. 每一章只承担自己的细纲内容，不得提前把后续多章剧情塞进第一章
-7. 【V3 Chapter Function 必填】每章额外明确三项功能约束，避免"有事件无作用"的水字：
+7. 用户原始需求若明确写了“第N章必须/就是/要发生”的事件，该事件是最高优先级章节承诺：
+   - 必须在指定章节写出行动和可见结果，不能只写“准备、计划、决定、即将”后移到下一章；
+   - 对应章节填写 explicit_user_contract（原承诺）、must_deliver（必须出现的具体行动/结果）、delivery_state（只能填 completed_in_chapter）和 visible_result（章内已经发生的可见结果）；
+   - 不得仅复制用户原句，outline、beats、chapter_goal 和 visible_result 必须共同证明事件已在本章完成。
+8. 【V3 Chapter Function 必填】每章额外明确三项功能约束，避免"有事件无作用"的水字：
    - function_type：本章功能类型，取值之一（开篇吸引/信息展示/人物成长/关系推进/冲突升级/爽点释放/伏笔埋设/伏笔回收/转折/高潮）
    - chapter_goal：本章必须达成的目标（如"父亲开始认可主角"）
    - reader_expectation：读者读完本章应有的期待（如"想知道主角如何赚钱"）
    连续多章不得全部是同一 function_type（如连续 5 章都是"信息展示"会被判定节奏问题）。
 
-输出 JSON: {"chapter_outlines":[{"volume":1,"seq":1,"title":"第一章 章名","outline":"梗概","beats":["节拍1","节拍2","节拍3"],"foreshadow_plant":[],"foreshadow_reap":[],"function_type":"开篇吸引","chapter_goal":"主角发现文字成真","reader_expectation":"想知道能力代价是什么","payoff_contract":{"reader_promise":"读者要等什么","pressure":"当前压力","active_choice":"主角选择","payoff_type":"reveal","visible_result":"可见结果","witness_reaction":"他人反应","cost":"代价","next_pressure":"新压力","setup_refs":[]}}]}"""),
+输出 JSON: {"chapter_outlines":[{"volume":1,"seq":1,"title":"第一章 章名","outline":"梗概","beats":["节拍1","节拍2","节拍3"],"foreshadow_plant":[],"foreshadow_reap":[],"function_type":"开篇吸引","chapter_goal":"主角发现文字成真","reader_expectation":"想知道能力代价是什么","explicit_user_contract":"用户明确指定的第1章事件；没有则空字符串","must_deliver":["必须当章发生的行动或结果"],"delivery_state":"completed_in_chapter","visible_result":"章内已发生的可见结果","payoff_contract":{"reader_promise":"读者要等什么","pressure":"当前压力","active_choice":"主角选择","payoff_type":"reveal","visible_result":"可见结果","witness_reaction":"他人反应","cost":"代价","next_pressure":"新压力","setup_refs":[]}}]}"""),
 
     ("bootstrap.blueprint_scene_beat", "1.0.0", "deepseek",
      """你是场景节拍设计师。请为《$selected_title》第一章生成场景节拍表。

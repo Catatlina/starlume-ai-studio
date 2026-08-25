@@ -5,6 +5,7 @@ from app.services.planning_contract import (
     validate_core_mechanic_contract,
     validate_longform_contract,
     validate_simulator_contract,
+    validate_chapter_outline_user_contract,
     validate_volume_plan_contract,
 )
 
@@ -64,6 +65,57 @@ def test_longform_contract_rejects_route_beyond_target():
     }
     defects = validate_longform_contract(output, idea="玄幻长篇", target_words=1_500_000)
     assert any("不能超过" in item or "超过项目目标" in item for item in defects)
+
+
+def test_explicit_first_chapter_promise_cannot_be_deferred_to_chapter_two():
+    idea = (
+        "第一章就是军事行动，装甲车撞开午门，三分钟控制紫禁城，"
+        "慈禧被架起来时还在想他们为什么不行礼。"
+    )
+    output = {
+        "chapter_outlines": [
+            {
+                "seq": 1,
+                "outline": "林辰在实验室确认时空锚点，决定调动部队控制紫禁城。",
+                "beats": ["发现锚点", "测试规则", "制定行动计划"],
+                "chapter_goal": "为军事行动做准备",
+                "delivery_state": "planned_for_later",
+            },
+            {
+                "seq": 2,
+                "outline": "装甲车撞开午门，部队控制紫禁城并抓住慈禧。",
+                "beats": ["撞开午门", "控制紫禁城", "抓住慈禧"],
+                "chapter_goal": "完成军事行动",
+            },
+        ],
+    }
+
+    defects = validate_chapter_outline_user_contract(output, idea=idea)
+
+    assert any("第 1 章" in item and "不得延后" in item for item in defects)
+
+
+def test_explicit_first_chapter_promise_passes_when_result_is_visible_in_chapter_one():
+    idea = (
+        "第一章就是军事行动，装甲车撞开午门，三分钟控制紫禁城，"
+        "慈禧被架起来时还在想他们为什么不行礼。"
+    )
+    output = {
+        "chapter_outlines": [
+            {
+                "seq": 1,
+                "outline": "装甲车撞开午门，部队三分钟控制紫禁城，慈禧被士兵架起仍质问为何不行礼。",
+                "beats": ["装甲车撞开午门", "三分钟控制紫禁城", "架起慈禧"],
+                "chapter_goal": "当章完成军事行动",
+                "explicit_user_contract": idea,
+                "must_deliver": ["撞开午门", "控制紫禁城", "架起慈禧"],
+                "delivery_state": "completed_in_chapter",
+                "visible_result": "紫禁城被控制，慈禧被架起",
+            }
+        ],
+    }
+
+    assert validate_chapter_outline_user_contract(output, idea=idea) == []
 
 
 def test_longform_parser_accepts_shorthand_total_without_trailing_character():

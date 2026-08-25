@@ -63,7 +63,7 @@ export type GenerationHistoryItem = {
 };
 
 const HUMAN_NODE_KEYS = new Set(["human_confirm_title", "n2"]);
-const RETRYABLE_STATUSES = new Set(["failed", "pending_budget", "pending_provider", "needs_review"]);
+const RETRYABLE_STATUSES = new Set(["failed", "pending_provider"]);
 const RESTARTABLE_RUN = new Set(["pending", "dispatch_failed", "failed", "pending_provider"]);
 const PLANNING_NODES = new Set([
   "plan_idea", "plan_market_fit", "plan_story_pattern", "plan_core_gameplay",
@@ -116,6 +116,10 @@ function visibleRunStatus(run: Run | null): string {
   if (statuses.has("failed") || statuses.has("pending_budget") || statuses.has("pending_provider") || statuses.has("needs_review")) return "needs_review";
   if (statuses.has("pending")) return "pending";
   return run.status || "pending";
+}
+
+function canRetryNode(node: RunNode): boolean {
+  return RETRYABLE_STATUSES.has(node.status) && node.output?.retryable !== false;
 }
 
 function formatTime(value?: string | null): string {
@@ -343,7 +347,10 @@ export function Progress({
   const generationFailures = Array.isArray(generationQuality.failures)
     ? generationQuality.failures as Array<Record<string, unknown>>
     : [];
-  const generationFailureReason = generationFailures
+  const rootGenerationFailures = generationFailures.some(item => String(item.code || "") !== "generation_preflight_failed")
+    ? generationFailures.filter(item => String(item.code || "") !== "generation_preflight_failed")
+    : generationFailures;
+  const generationFailureReason = rootGenerationFailures
     .map(item => String(item.message || item.code || ""))
     .filter(Boolean)
     .slice(0, 2)
@@ -356,12 +363,18 @@ export function Progress({
   );
   const canonicalScore = canonicalGeneration.review_score;
   const qualityGate = (canonicalGeneration.quality_gate || {}) as Record<string, unknown>;
-  const qualityFailures = (qualityGate.failures || []) as Array<Record<string, unknown>>;
+  const rawQualityFailures = (qualityGate.failures || []) as Array<Record<string, unknown>>;
+  const qualityFailures = rawQualityFailures.some(item => String(item.dimension || item.code || "") !== "generation_preflight_failed")
+    ? rawQualityFailures.filter(item => String(item.dimension || item.code || "") !== "generation_preflight_failed")
+    : rawQualityFailures;
   const canonicalNeedsReview = canonicalStatus === "needs_review"
     || canonicalStatus === "needs_rewrite"
     || run?.status === "needs_review"
     || generationQuality.passed === false;
   const planningNodes = nodes.filter(node => PLANNING_NODES.has(node.node_key));
+  const retryableNodes = nodes.filter(canRetryNode);
+  const canRestartRun = RESTARTABLE_RUN.has(run?.status || "")
+    && (["pending", "dispatch_failed"].includes(run?.status || "") || retryableNodes.length > 0);
   const novelName = cleanNovelTitle(novel?.title || selectedTitle || titles[0]);
 
   async function retry(node: RunNode) {
@@ -485,12 +498,12 @@ export function Progress({
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
           <span className={`progress-run-state ${runDisplayStatus}`}>{RUN_LABELS[runDisplayStatus] || runDisplayStatus}</span>
-          {failedCount > 0 && (
+          {retryableNodes.length > 0 && (
             <button className="btn-sm btn-primary" disabled={retrying !== ""} onClick={() => {
-              nodes.filter(n => RETRYABLE_STATUSES.has(n.status)).forEach(n => retry(n));
-            }}><RefreshCw size={14} /> 重试待处理 ({failedCount})</button>
+              void retry(retryableNodes[0]);
+            }}><RefreshCw size={14} /> 重试可恢复故障 ({retryableNodes.length})</button>
           )}
-          {RESTARTABLE_RUN.has(run.status || "") && (
+          {canRestartRun && (
             <button className="btn-sm btn-ghost" disabled={restarting !== ""} onClick={() => void restartCurrentRun()}>
               <RefreshCw size={14} /> 启动/重启
             </button>
@@ -514,8 +527,12 @@ export function Progress({
             <strong>{pendingApproval ? "生成尚未完成" : "生成结果需要处理"}</strong>
             <span>
               {canonicalReason || (canonicalNeedsReview ? "质量门未通过，草稿已保存为待重写。" : "系统正在等待生成确认。")}
-              {canonicalScore !== undefined && canonicalScore !== null ? ` 当前质量分：${String(canonicalScore)}。` : ""}
             </span>
+            {canonicalScore !== undefined && canonicalScore !== null && (
+              <small style={{ display: "block", marginTop: 6, opacity: 0.78 }}>
+                审阅参考分：{String(canonicalScore)}。参考分不替代字数、开场、连续性等硬约束。
+              </small>
+            )}
             {canonicalNeedsReview && qualityFailures.length > 0 && (
               <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid rgba(255,255,255,0.1)" }}>
                 <div style={{ fontWeight: 600, marginBottom: 6, fontSize: 13 }}>失败原因：</div>
@@ -647,7 +664,13 @@ export function Progress({
                 <span>尝试 {selectedNode.attempt || 0} 次</span>
               </div>
               {selectedNode.error && <div className="node-error"><AlertTriangle size={17} /><div><strong>执行失败</strong><p>{selectedNode.error}</p></div></div>}
-              {RETRYABLE_STATUSES.has(selectedNode.status) && (
+              {selectedNode.output?.retryable === false && (
+                <div className="node-error" style={{ marginTop: 10 }}>
+                  <AlertTriangle size={17} />
+                  <div><strong>已停止自动重试</strong><p>这是确定性质量或生成契约问题；请先修正页面列出的原因，再重新生成。</p></div>
+                </div>
+              )}
+              {canRetryNode(selectedNode) && (
                 <button type="button" className="retry-node" disabled={Boolean(retrying)} onClick={() => void retry(selectedNode)}>
                   {retrying === selectedNode.node_key ? <><Loader2 className="spin" size={16} /> 正在重新排队…</> : <><RefreshCw size={16} /> 重试此步骤</>}
                 </button>

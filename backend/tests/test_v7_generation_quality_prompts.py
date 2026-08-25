@@ -401,6 +401,18 @@ def test_action_opening_recognises_common_chinese_action_verbs():
     assert result["observed_mode"] == "action"
 
 
+def test_action_opening_accepts_real_lab_sample_with_visible_first_paragraph_action():
+    text = (
+        "实验室的空调嗡嗡作响，屏幕上的波形数据跳得越来越乱。"
+        "林辰拧开保温杯灌了口凉水，手指刚搭上键盘，耳边忽然传来一声清晰的咔哒。"
+    )
+
+    result = inspect_opening(text, requested_mode="action", chapter_number=1)
+
+    assert result["passed"] is True
+    assert result["observed_mode"] == "action"
+
+
 def test_action_opening_does_not_accept_action_that_arrives_too_late():
     text = (
         "午后的日头正毒，外门广场的青石砖被晒得发烫。"
@@ -1299,7 +1311,7 @@ def test_generation_prompt_carries_reader_promise_and_cross_chapter_hooks():
     assert "手仍按在门缝上" in prompt
     assert "每约 800-1200 字" in prompt
     assert "读者推荐预算为 1800-2700 字" in prompt
-    assert "本次生成硬范围为 1944-3000 字" in prompt
+    assert "本次生成硬范围为 2200-3000 字" in prompt
     assert "章末必须把钩子落实" in prompt
     assert "压制→蓄力→爆发→反馈→余波" in prompt
     assert "反馈必须落到对手、组织、资源、规则或旁观者的可见变化" in prompt
@@ -2064,13 +2076,12 @@ def test_scene_length_bounds_make_pacing_budget_a_generation_contract():
     )
 
 
-def test_generation_keeps_post_process_margin_inside_reader_maximum():
+def test_single_pass_generation_uses_the_same_reader_facing_hard_maximum():
     assert SCENE_POST_PROCESS_SAFETY_MARGIN_CHARS == 32
     reader_max = 3000
-    generation_sequence_max = reader_max - SCENE_POST_PROCESS_SAFETY_MARGIN_CHARS
+    generation_sequence_max = reader_max
 
-    assert generation_sequence_max == 2968
-    assert generation_sequence_max < reader_max
+    assert generation_sequence_max == 3000
 
 
 def test_future_scene_reserve_keeps_complete_event_capacity_available():
@@ -2144,17 +2155,17 @@ def test_scene_structural_smell_requires_a_scene_sized_sample():
 def test_chapter_completion_uses_reader_budget_range_not_nominal_target():
     assert GenerationEngine._chapter_within_reader_budget(
         word_count=2578,
-        minimum_chars=1944,
+        minimum_chars=2200,
         maximum_chars=3000,
     ) is True
     assert GenerationEngine._chapter_within_reader_budget(
         word_count=1900,
-        minimum_chars=1944,
+        minimum_chars=2200,
         maximum_chars=3000,
     ) is False
     assert GenerationEngine._chapter_within_reader_budget(
         word_count=3001,
-        minimum_chars=1944,
+        minimum_chars=2200,
         maximum_chars=3000,
     ) is False
 
@@ -2469,8 +2480,8 @@ def test_single_pass_writer_retries_the_whole_chapter_as_one_budget_unit():
         scene_plan={"beats": []},
         outline="开篇冲突",
         target_word_count=3000,
-        chapter_min_chars=1944,
-        chapter_max_chars=2968,
+        chapter_min_chars=2200,
+        chapter_max_chars=3000,
         chapter_reader_max_chars=3000,
     ))
 
@@ -2482,6 +2493,8 @@ def test_single_pass_writer_retries_the_whole_chapter_as_one_budget_unit():
     assert "上一版完整正文（仅用于压缩" in calls[1]["prompt"]
     assert "整章写作提示" not in calls[1]["prompt"]
     assert "终稿压缩编辑" in calls[1]["system_prompt"]
+    assert calls[0]["max_tokens"] <= 2600
+    assert "优先写到 2350-2550" in calls[0]["system_prompt"]
 
 
 def test_single_pass_overlong_candidate_uses_one_bounded_compression_pass():
@@ -2512,8 +2525,8 @@ def test_single_pass_overlong_candidate_uses_one_bounded_compression_pass():
         scene_plan={"beats": []},
         outline="承接上一章的冲突",
         target_word_count=2700,
-        chapter_min_chars=1944,
-        chapter_max_chars=2968,
+        chapter_min_chars=2200,
+        chapter_max_chars=3000,
         chapter_reader_max_chars=3000,
     ))
 
@@ -2554,8 +2567,8 @@ def test_single_pass_truncated_overlong_candidate_compresses_instead_of_raising_
         scene_plan={"beats": []},
         outline="承接上一章的冲突",
         target_word_count=2700,
-        chapter_min_chars=1944,
-        chapter_max_chars=2968,
+        chapter_min_chars=2200,
+        chapter_max_chars=3000,
         chapter_reader_max_chars=3000,
     ))
 
@@ -2565,6 +2578,48 @@ def test_single_pass_truncated_overlong_candidate_compresses_instead_of_raising_
     assert "可能在 Provider 输出上限处截断" in calls[1]["prompt"]
     assert "整章写作提示" not in calls[1]["prompt"]
     assert "终稿压缩编辑" in calls[1]["system_prompt"]
+
+
+def test_single_pass_second_overlong_candidate_is_a_non_retryable_contract_failure():
+    engine = GenerationEngine.__new__(GenerationEngine)
+    engine.quality_profile = select_quality_profile()
+    calls = []
+
+    class Gateway:
+        async def generate(self, prompt, **kwargs):
+            calls.append({"prompt": prompt, **kwargs})
+            text = "字" * (3994 if len(calls) == 1 else 3300)
+            return {
+                "text": text,
+                "provider": "deepseek",
+                "model": "deepseek-chat",
+                "tokens_input": 10,
+                "tokens_output": 3000,
+                "cost": 0.01,
+                "finish_reason": "stop",
+            }
+
+    engine.ai_gateway = Gateway()
+    engine._build_generation_prompt = lambda *_args, **_kwargs: "整章写作提示"
+
+    with pytest.raises(AIGatewayError, match="generation contract violation") as caught:
+        asyncio.run(engine._generate_single_pass_chapter(
+            chapter_number=1,
+            context={"context_layers": {}},
+            scene_plan={"beats": []},
+            outline="第一章兑现开局承诺",
+            target_word_count=2700,
+            chapter_min_chars=2200,
+            chapter_max_chars=3000,
+            chapter_reader_max_chars=3000,
+        ))
+
+    from app.v7.generation.generation_engine import is_retryable_provider_failure
+
+    assert len(calls) == 2
+    assert "first_candidate=3994" in str(caught.value)
+    assert "final_candidate=3300" in str(caught.value)
+    assert is_retryable_provider_failure(caught.value) is False
 
 
 def test_expression_only_scene_retry_can_get_one_fresh_style_path():

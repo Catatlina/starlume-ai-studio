@@ -1817,6 +1817,26 @@ def regenerate_run_titles(
 @app.post("/api/v1/runs/{run_id}/nodes/{node_key}/retry")
 async def retry_node(run_id: str, node_key: str, user: dict = Depends(get_current_user)) -> ApiResponse:
     conn, _run = load_run_for_user(run_id, user, {"owner", "editor"})
+    node = row_to_dict(conn.execute(
+        "SELECT status, output FROM run_nodes WHERE run_id = %s AND node_key = %s",
+        (run_id, node_key),
+    ).fetchone())
+    if node is None:
+        conn.close()
+        raise HTTPException(status_code=404, detail="创作步骤不存在")
+    node_output = decode(node.get("output"), {})
+    if node.get("status") not in {"failed", "pending_provider"}:
+        conn.close()
+        raise HTTPException(
+            status_code=409,
+            detail="该步骤不是可恢复的模型故障；质量待重写需要先调整策划或正文，不能原样重跑。",
+        )
+    if isinstance(node_output, dict) and node_output.get("retryable") is False:
+        conn.close()
+        raise HTTPException(
+            status_code=409,
+            detail="该失败已判定为确定性契约问题，原样重试不会成功。请先修正失败原因。",
+        )
     conn.execute(
         "UPDATE run_nodes SET status = 'pending', output = '{}', error = NULL WHERE run_id = %s AND node_key = %s",
         (run_id, node_key),
@@ -1850,18 +1870,36 @@ async def restart_run(run_id: str, request: Request, user: dict = Depends(get_cu
             status_code=409,
             detail="已完成的创作请用「全流程重执行」新建一次 run，旧 run 与章节、版本会保留。",
         )
+    if run["status"] not in {"pending", "dispatch_failed", "failed", "pending_provider"}:
+        conn.close()
+        raise HTTPException(
+            status_code=409,
+            detail="当前流程不是可恢复的运行故障；质量待重写或人工确认状态不能原样重启。",
+        )
     from .workers.tasks import execute_bootstrap, BOOTSTRAP_NODES
     rows = conn.execute(
-        "SELECT node_key, status FROM run_nodes WHERE run_id = %s", (run_id,)
+        "SELECT node_key, status, output FROM run_nodes WHERE run_id = %s", (run_id,)
     ).fetchall()
-    status_by_key = {r["node_key"]: r["status"] for r in rows}
+    nodes_by_key = {r["node_key"]: r for r in rows}
     start_key = None
     for key, *_ in BOOTSTRAP_NODES:
-        if status_by_key.get(key) != "succeeded":
+        node_row = nodes_by_key.get(key)
+        if not node_row or node_row["status"] != "succeeded":
             start_key = key
             break
     if start_key is None:
         start_key = BOOTSTRAP_NODES[0][0] if BOOTSTRAP_NODES else "plan_idea"
+    start_node = nodes_by_key.get(start_key)
+    start_output = decode(start_node.get("output"), {}) if start_node else {}
+    if start_node and (
+        start_node.get("status") in {"needs_review", "pending_budget"}
+        or (isinstance(start_output, dict) and start_output.get("retryable") is False)
+    ):
+        conn.close()
+        raise HTTPException(
+            status_code=409,
+            detail="首个未完成步骤是确定性质量/预算问题，原样重启不会成功。请先修正失败原因。",
+        )
     conn.execute(
         """UPDATE run_nodes SET status = 'pending', output = '{}', error = NULL,
                started_at = NULL, finished_at = NULL
