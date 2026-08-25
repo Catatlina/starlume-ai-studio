@@ -94,6 +94,41 @@ def test_node_retry_requires_auth(client):
     assert r.status_code in [401, 404]
 
 
+def test_retry_after_generation_fix_only_matches_pre_252_false_truncation():
+    from app.main import _retry_after_generation_fix
+
+    old_false_rejection = {
+        "retryable": False,
+        "failure_kind": "generation_contract",
+        "error": (
+            "single-pass chapter generation contract violation after bounded retry: "
+            "first_candidate=3540,final_candidate=2803,minimum=2200,maximum=3000,"
+            "retry_mode=compress_recover,provider_truncated=True"
+        ),
+    }
+    recovery = _retry_after_generation_fix("write_chapter_draft", "failed", old_false_rejection)
+
+    assert recovery is not None
+    assert recovery["to_version"] == "2.52.0"
+    assert recovery["final_chars"] == 2803
+
+    current_failure = {
+        **old_false_rejection,
+        "generation_version": "2.52.0",
+        "error": old_false_rejection["error"] + ",terminal_complete=False,terminal_reason=unfinished_sentence",
+    }
+    assert _retry_after_generation_fix("write_chapter_draft", "failed", current_failure) is None
+
+    genuinely_overlong = {
+        **old_false_rejection,
+        "error": old_false_rejection["error"].replace("final_candidate=2803", "final_candidate=3803"),
+    }
+    assert _retry_after_generation_fix("write_chapter_draft", "failed", genuinely_overlong) is None
+
+    quality_failure = {**old_false_rejection, "failure_kind": "quality_contract"}
+    assert _retry_after_generation_fix("write_chapter_draft", "failed", quality_failure) is None
+
+
 def test_expand_outline_endpoint(client):
     token = _auth(client)
     pid = client.get("/api/v1/projects", headers={"Authorization": f"Bearer {token}"}).json()["data"][0]["id"]
@@ -129,6 +164,92 @@ def _make_run(client, token):
 def test_restart_requires_auth(client):
     r = client.post("/api/v1/runs/00000000-0000-0000-0000-000000000000/restart", json={})
     assert r.status_code == 401
+
+
+def test_retry_after_fix_reuses_run_and_records_audit(monkeypatch):
+    import asyncio
+    import json
+    from starlette.requests import Request
+    import app.main as main_mod
+    import app.workers.tasks as tasks_mod
+
+    run_id = "run-old-contract"
+    old_error = (
+        "single-pass chapter generation contract violation after bounded retry: "
+        "first_candidate=3540,final_candidate=2803,minimum=2200,maximum=3000,"
+        "retry_mode=compress_recover,provider_truncated=True"
+    )
+
+    class Result:
+        def __init__(self, row=None):
+            self.row = row
+
+        def fetchone(self):
+            return self.row
+
+    class FakeConnection:
+        def __init__(self):
+            self.statements = []
+            self.committed = False
+            self.closed = False
+
+        def execute(self, sql, params):
+            self.statements.append((" ".join(sql.split()), params))
+            if "SELECT status, output, error FROM run_nodes" in sql:
+                return Result({
+                    "status": "failed",
+                    "output": {
+                        "retryable": False,
+                        "failure_kind": "generation_contract",
+                        "error": old_error,
+                    },
+                    "error": old_error,
+                })
+            return Result()
+
+        def commit(self):
+            self.committed = True
+
+        def close(self):
+            self.closed = True
+
+    connection = FakeConnection()
+    monkeypatch.setattr(
+        main_mod,
+        "load_run_for_user",
+        lambda *_args, **_kwargs: (connection, {"context": {"preserved": True}}),
+    )
+
+    dispatched = []
+    monkeypatch.setattr(tasks_mod, "dispatch_bootstrap_run", lambda *args: dispatched.append(args))
+    request = Request({
+        "type": "http",
+        "method": "POST",
+        "path": "/retry",
+        "headers": [
+            (b"x-api-base-url", b"https://provider.test/v1"),
+            (b"x-model", b"writer-model"),
+        ],
+        "query_string": b"",
+    })
+    response = asyncio.run(
+        main_mod.retry_node(
+            run_id,
+            "write_chapter_draft",
+            request,
+            user={"id": "user-1"},
+        )
+    )
+
+    assert response.data["retry_mode"] == "after_code_fix"
+    assert connection.committed and connection.closed
+    node_update = next(params for sql, params in connection.statements if sql.startswith("UPDATE run_nodes"))
+    assert node_update == (run_id, "write_chapter_draft")
+    run_update = next(params for sql, params in connection.statements if sql.startswith("UPDATE workflow_runs"))
+    saved_context = json.loads(run_update[1])
+    assert saved_context["preserved"] is True
+    assert saved_context["code_fix_retries"][-1]["to_version"] == "2.52.0"
+    assert dispatched == [(run_id, "write_chapter_draft", "", "https://provider.test/v1", "writer-model")]
 
 
 def test_restart_resets_non_succeeded_nodes_keeps_run_id(client, monkeypatch):

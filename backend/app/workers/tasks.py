@@ -51,7 +51,10 @@ from app.v7.quality.opening_variation import (
     opening_prompt_block,
     select_opening_plan,
 )
-from app.v7.generation.generation_engine import is_retryable_provider_failure
+from app.v7.generation.generation_engine import (
+    CHAPTER_SINGLE_PASS_GENERATION_VERSION,
+    is_retryable_provider_failure,
+)
 from app.services.planning_contract import (
     creative_bible_section_defects,
     creative_bible_strategy_section_defects,
@@ -1604,6 +1607,7 @@ def execute_bootstrap(self, run_id: str, start_key: str = "plan_idea",
                     "retryable": retryable,
                     "failure_kind": "provider_transient" if retryable else "generation_contract",
                     "error": str(exc)[:300],
+                    "generation_version": CHAPTER_SINGLE_PASS_GENERATION_VERSION,
                 }
                 _mark_node(
                     run_id,

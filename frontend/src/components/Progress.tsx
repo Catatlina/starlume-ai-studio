@@ -122,6 +122,14 @@ function canRetryNode(node: RunNode): boolean {
   return RETRYABLE_STATUSES.has(node.status) && node.output?.retryable !== false;
 }
 
+function retryAfterFix(node: RunNode): Record<string, unknown> | null {
+  const metadata = node.output?.retry_after_fix;
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return null;
+  return (metadata as Record<string, unknown>).available === true
+    ? metadata as Record<string, unknown>
+    : null;
+}
+
 function formatTime(value?: string | null): string {
   if (!value) return "—";
   return new Intl.DateTimeFormat("zh-CN", {
@@ -325,6 +333,7 @@ export function Progress({
   const [restarting, setRestarting] = useState("");
   const [bootstrapping, setBootstrapping] = useState(false);
   const [showReexecute, setShowReexecute] = useState(false);
+  const [fixRetryNodeKey, setFixRetryNodeKey] = useState("");
   const [notice, setNotice] = useState<{ kind: "success" | "error"; text: string } | null>(null);
 
   const selectedNode = useMemo(
@@ -373,18 +382,26 @@ export function Progress({
     || generationQuality.passed === false;
   const planningNodes = nodes.filter(node => PLANNING_NODES.has(node.node_key));
   const retryableNodes = nodes.filter(canRetryNode);
+  const retryAfterFixNodes = nodes.filter(node => retryAfterFix(node) !== null);
+  const fixRetryNode = nodes.find(node => node.node_key === fixRetryNodeKey) || null;
   const canRestartRun = RESTARTABLE_RUN.has(run?.status || "")
     && (["pending", "dispatch_failed"].includes(run?.status || "") || retryableNodes.length > 0);
   const novelName = cleanNovelTitle(novel?.title || selectedTitle || titles[0]);
 
-  async function retry(node: RunNode) {
+  async function retry(node: RunNode, afterFix = false) {
     if (!run) return;
     setRetrying(node.node_key);
     setNotice(null);
     try {
       await apiRaw(`/api/v1/runs/${run.id}/nodes/${node.node_key}/retry`, { method: "POST", body: "{}" });
+      setFixRetryNodeKey("");
       await onNewRun(run.id);
-      setNotice({ kind: "success", text: `“${node.title}”已重新排队，页面会自动刷新状态。` });
+      setNotice({
+        kind: "success",
+        text: afterFix
+          ? `“${node.title}”已使用修复版本重新排队；前面已完成的策划步骤不会重跑。`
+          : `“${node.title}”已重新排队，页面会自动刷新状态。`,
+      });
     } catch (caught) {
       const detail = caught instanceof ApiError ? caught.message : String(caught);
       setNotice({ kind: "error", text: `重试失败：${detail}` });
@@ -503,12 +520,17 @@ export function Progress({
               void retry(retryableNodes[0]);
             }}><RefreshCw size={14} /> 重试可恢复故障 ({retryableNodes.length})</button>
           )}
+          {retryAfterFixNodes.length > 0 && (
+            <button className="btn-sm btn-primary" disabled={retrying !== ""} onClick={() => {
+              setFixRetryNodeKey(retryAfterFixNodes[0].node_key);
+            }}><RefreshCw size={14} /> 使用修复版重试章节 ({retryAfterFixNodes.length})</button>
+          )}
           {canRestartRun && (
             <button className="btn-sm btn-ghost" disabled={restarting !== ""} onClick={() => void restartCurrentRun()}>
               <RefreshCw size={14} /> 启动/重启
             </button>
           )}
-          {nodes.length > 0 && run.status !== "running" && (
+          {nodes.length > 0 && run.status !== "running" && retryAfterFixNodes.length === 0 && (
             <button className="btn-sm btn-primary" disabled={bootstrapping} onClick={() => setShowReexecute(true)}>
               <RefreshCw size={14} /> 全流程重执行
             </button>
@@ -664,10 +686,19 @@ export function Progress({
                 <span>尝试 {selectedNode.attempt || 0} 次</span>
               </div>
               {selectedNode.error && <div className="node-error"><AlertTriangle size={17} /><div><strong>执行失败</strong><p>{selectedNode.error}</p></div></div>}
-              {selectedNode.output?.retryable === false && (
+              {selectedNode.output?.retryable === false && retryAfterFix(selectedNode) === null && (
                 <div className="node-error" style={{ marginTop: 10 }}>
                   <AlertTriangle size={17} />
                   <div><strong>已停止自动重试</strong><p>这是确定性质量或生成契约问题；请先修正页面列出的原因，再重新生成。</p></div>
+                </div>
+              )}
+              {retryAfterFix(selectedNode) && (
+                <div className="node-error" style={{ marginTop: 10 }}>
+                  <RefreshCw size={17} />
+                  <div>
+                    <strong>新版已修复这个旧误判</strong>
+                    <p>{String(retryAfterFix(selectedNode)?.reason || "可只重试当前章节，前面已完成的策划步骤会保留。")}</p>
+                  </div>
                 </div>
               )}
               {canRetryNode(selectedNode) && (
@@ -709,6 +740,24 @@ export function Progress({
               <button type="button" className="btn-sm btn-ghost" disabled={bootstrapping} onClick={() => setShowReexecute(false)}>取消</button>
               <button type="button" className="btn-sm btn-primary" disabled={bootstrapping} onClick={() => void reexecuteAll()}>
                 {bootstrapping ? "正在新建…" : "确认重执行"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {fixRetryNode && (
+        <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={() => { if (!retrying) setFixRetryNodeKey(""); }}>
+          <div className="modal-card" onClick={event => event.stopPropagation()}>
+            <h3>使用修复版本重试章节？</h3>
+            <p>
+              只会重新执行失败的<strong>“{fixRetryNode.title}”</strong>，复用前面已经成功的 {succeededCount} 个步骤；
+              不会重跑策划，也不会删除旧失败记录。确认后将调用一次真实 Provider，并继续使用最多两次候选的章节生成上限。
+            </p>
+            <div className="modal-actions">
+              <button type="button" className="btn-sm btn-ghost" disabled={Boolean(retrying)} onClick={() => setFixRetryNodeKey("")}>取消</button>
+              <button type="button" className="btn-sm btn-primary" disabled={Boolean(retrying)} onClick={() => void retry(fixRetryNode, true)}>
+                {retrying ? "正在重新排队…" : "确认只重试本章"}
               </button>
             </div>
           </div>

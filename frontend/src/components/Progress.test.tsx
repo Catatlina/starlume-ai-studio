@@ -242,6 +242,65 @@ describe("创作进度门禁", () => {
     expect(screen.queryByRole("button", { name: /重试待处理/ })).toBeNull();
   });
 
+  it("旧版截断误判只重试章节并明确复用已完成步骤", async () => {
+    const { apiRaw } = await import("../lib/api");
+    const onNewRun = vi.fn().mockResolvedValue(undefined);
+    (apiRaw as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+    const succeededNodes = Array.from({ length: 12 }, (_, index) => ({
+      node_key: `plan_${index}`,
+      kind: "agent",
+      agent: "deepseek",
+      title: `策划 ${index + 1}`,
+      status: "succeeded",
+    }));
+
+    render(
+      <Progress
+        run={{
+          id: "run-old-contract",
+          status: "failed",
+          current_node_key: "write_chapter_draft",
+          context: {},
+          nodes: [
+            ...succeededNodes,
+            {
+              node_key: "write_chapter_draft",
+              kind: "agent",
+              agent: "deepseek",
+              title: "章节初稿",
+              status: "failed",
+              error: "旧版误判",
+              output: {
+                retryable: false,
+                failure_kind: "generation_contract",
+                retry_after_fix: {
+                  available: true,
+                  to_version: "2.52.0",
+                  reason: "旧版将字数合格且已收束的截断恢复稿误判为失败。",
+                },
+              },
+            },
+          ],
+        }}
+        novel={novelStub}
+        onConfirm={vi.fn()}
+        onRegenerateTitles={vi.fn()}
+        onNewRun={onNewRun}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: /全流程重执行/ })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /使用修复版重试章节/ }));
+    expect(screen.getByText(/复用前面已经成功的 12 个步骤/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "确认只重试本章" }));
+
+    await waitFor(() => expect(apiRaw).toHaveBeenCalledWith(
+      "/api/v1/runs/run-old-contract/nodes/write_chapter_draft/retry",
+      expect.objectContaining({ method: "POST" }),
+    ));
+    await waitFor(() => expect(onNewRun).toHaveBeenCalledWith("run-old-contract"));
+  });
+
   it("空状态展示开始创作按钮，点击后新建 run 并通过 onNewRun 切换", async () => {
     const { apiRaw } = await import("../lib/api");
     const onNewRun = vi.fn().mockResolvedValue(undefined);

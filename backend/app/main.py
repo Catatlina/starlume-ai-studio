@@ -1537,12 +1537,61 @@ async def generate_video_script(
     return ok({"platform": platform, "script": output})
 
 
+def _retry_after_generation_fix(node_key: str, status: str, output: Any) -> dict[str, Any] | None:
+    """Expose a one-time recovery path for the pre-2.52 false truncation rejection.
+
+    Version 2.51 rejected a compressed chapter whenever the provider response
+    reached its token ceiling, even when the recovered prose was inside the
+    requested character range and ended naturally.  Version 2.52 records
+    ``terminal_complete=...`` and accepts that exact safe case.  Keep this
+    recognizer deliberately narrow so unrelated deterministic contract or
+    quality failures cannot be force-retried.
+    """
+    if node_key != "write_chapter_draft" or status != "failed" or not isinstance(output, dict):
+        return None
+    if output.get("retryable") is not False or output.get("failure_kind") != "generation_contract":
+        return None
+    error = str(output.get("error") or "")
+    if "terminal_complete=" in error:
+        return None
+    match = _re.search(
+        r"final_candidate=(\d+),minimum=(\d+),maximum=(\d+),"
+        r"retry_mode=compress_recover,provider_truncated=True(?:,|$)",
+        error,
+    )
+    if not match:
+        return None
+    final_chars, minimum_chars, maximum_chars = (int(value) for value in match.groups())
+    if not minimum_chars <= final_chars <= maximum_chars:
+        return None
+    from .v7.generation.generation_engine import CHAPTER_SINGLE_PASS_GENERATION_VERSION
+
+    if CHAPTER_SINGLE_PASS_GENERATION_VERSION != "2.52.0":
+        return None
+    return {
+        "available": bool(match and minimum_chars <= final_chars <= maximum_chars),
+        "from_version": "pre-2.52.0",
+        "to_version": CHAPTER_SINGLE_PASS_GENERATION_VERSION,
+        "reason": "旧版将字数合格且已收束的截断恢复稿误判为失败；2.52 已加入终止完整性判断。",
+        "final_chars": final_chars,
+        "minimum_chars": minimum_chars,
+        "maximum_chars": maximum_chars,
+    }
+
+
 def _hydrate_run(conn, run: dict) -> dict:
     run = dict(run)
     run_id = str(run["id"])
     nodes = [dict(row) for row in conn.execute("SELECT * FROM run_nodes WHERE run_id = %s ORDER BY node_key", (run_id,)).fetchall()]
     for node in nodes:
         node["output"] = decode(node["output"], {})
+        retry_after_fix = _retry_after_generation_fix(
+            str(node.get("node_key") or ""),
+            str(node.get("status") or ""),
+            node["output"],
+        )
+        if retry_after_fix:
+            node["output"] = {**node["output"], "retry_after_fix": retry_after_fix}
     run["context"] = decode(run["context"], {})
     run["nodes"] = nodes
     return run
@@ -1815,10 +1864,15 @@ def regenerate_run_titles(
 
 
 @app.post("/api/v1/runs/{run_id}/nodes/{node_key}/retry")
-async def retry_node(run_id: str, node_key: str, user: dict = Depends(get_current_user)) -> ApiResponse:
-    conn, _run = load_run_for_user(run_id, user, {"owner", "editor"})
+async def retry_node(
+    run_id: str,
+    node_key: str,
+    request: Request,
+    user: dict = Depends(get_current_user),
+) -> ApiResponse:
+    conn, run = load_run_for_user(run_id, user, {"owner", "editor"})
     node = row_to_dict(conn.execute(
-        "SELECT status, output FROM run_nodes WHERE run_id = %s AND node_key = %s",
+        "SELECT status, output, error FROM run_nodes WHERE run_id = %s AND node_key = %s FOR UPDATE",
         (run_id, node_key),
     ).fetchone())
     if node is None:
@@ -1831,25 +1885,51 @@ async def retry_node(run_id: str, node_key: str, user: dict = Depends(get_curren
             status_code=409,
             detail="该步骤不是可恢复的模型故障；质量待重写需要先调整策划或正文，不能原样重跑。",
         )
-    if isinstance(node_output, dict) and node_output.get("retryable") is False:
+    retry_after_fix = _retry_after_generation_fix(node_key, str(node.get("status") or ""), node_output)
+    if isinstance(node_output, dict) and node_output.get("retryable") is False and not retry_after_fix:
         conn.close()
         raise HTTPException(
             status_code=409,
             detail="该失败已判定为确定性契约问题，原样重试不会成功。请先修正失败原因。",
         )
+    run_context = decode(run.get("context"), {})
+    if not isinstance(run_context, dict):
+        run_context = {}
+    if retry_after_fix:
+        audit_entries = list(run_context.get("code_fix_retries") or [])
+        audit_entries.append({
+            "node_key": node_key,
+            "retried_at": datetime.now(timezone.utc).isoformat(),
+            "from_version": retry_after_fix["from_version"],
+            "to_version": retry_after_fix["to_version"],
+            "reason": retry_after_fix["reason"],
+            "previous_error": str(node.get("error") or node_output.get("error") or "")[:500],
+        })
+        run_context["code_fix_retries"] = audit_entries[-10:]
     conn.execute(
         "UPDATE run_nodes SET status = 'pending', output = '{}', error = NULL WHERE run_id = %s AND node_key = %s",
         (run_id, node_key),
     )
     conn.execute(
-        "UPDATE workflow_runs SET status = 'running', current_node_key = %s, updated_at = CURRENT_TIMESTAMP WHERE id = %s",
-        (node_key, run_id),
+        "UPDATE workflow_runs SET status = 'running', current_node_key = %s, context = %s, updated_at = CURRENT_TIMESTAMP WHERE id = %s",
+        (node_key, encode(run_context), run_id),
     )
     conn.commit()
     conn.close()
-    from .workers.tasks import execute_bootstrap
-    execute_bootstrap.delay(run_id, node_key)
-    return ok({"run_id": run_id, "node_key": node_key})
+    from .workers.tasks import dispatch_bootstrap_run
+    dispatch_bootstrap_run(
+        run_id,
+        node_key,
+        request.headers.get("X-Api-Key", ""),
+        request.headers.get("X-Api-Base-Url", ""),
+        request.headers.get("X-Model", ""),
+    )
+    return ok({
+        "run_id": run_id,
+        "node_key": node_key,
+        "retry_mode": "after_code_fix" if retry_after_fix else "transient_failure",
+        "generation_version": retry_after_fix.get("to_version") if retry_after_fix else None,
+    })
 
 
 @app.post("/api/v1/runs/{run_id}/restart")
