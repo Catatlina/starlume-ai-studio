@@ -2580,6 +2580,102 @@ def test_single_pass_truncated_overlong_candidate_compresses_instead_of_raising_
     assert "终稿压缩编辑" in calls[1]["system_prompt"]
 
 
+def test_single_pass_accepts_structurally_complete_length_finish_after_compression():
+    """Replay the production 3540 -> 2803 bounded-retry failure shape."""
+    engine = GenerationEngine.__new__(GenerationEngine)
+    engine.quality_profile = select_quality_profile()
+    calls = []
+
+    class Gateway:
+        provider = "deepseek"
+
+        async def generate(self, prompt, **kwargs):
+            calls.append({"prompt": prompt, **kwargs})
+            first = len(calls) == 1
+            return {
+                "text": ("字" * 3539 + "。") if first else ("字" * 2802 + "。"),
+                "provider": "deepseek",
+                "model": "deepseek-chat",
+                "tokens_input": 10,
+                "tokens_output": 2291 if first else kwargs["max_tokens"],
+                "cost": 0.01,
+                "truncated": True,
+                "finish_reason": "length",
+            }
+
+    engine.ai_gateway = Gateway()
+    engine._build_generation_prompt = lambda *_args, **_kwargs: "整章写作提示"
+
+    result = asyncio.run(engine._generate_single_pass_chapter(
+        chapter_number=1,
+        context={"context_layers": {}},
+        scene_plan={"beats": []},
+        outline="第一章兑现开局承诺",
+        target_word_count=2700,
+        chapter_min_chars=2200,
+        chapter_max_chars=3000,
+        chapter_reader_max_chars=3000,
+    ))
+
+    assert result["word_count"] == 2803
+    assert len(calls) == 2
+    assert calls[0]["max_tokens"] == 1834
+    assert calls[0]["reject_truncated"] is False
+    assert calls[1]["max_tokens"] < 1900
+    assert result["scene_outputs"][0]["provider_truncated"] is True
+    assert result["scene_outputs"][0]["terminal_completeness"]["passed"] is True
+    assert result["scene_outputs"][0]["completion_budget"] == {
+        "initial_max_tokens": 1834,
+        "final_max_tokens": calls[1]["max_tokens"],
+        "calibrated_chars_per_token": round(3540 / 2291, 4),
+    }
+    assert any(
+        warning["code"] == "chapter_provider_length_finish_structurally_complete"
+        for warning in result["scene_outputs"][0]["generation_warnings"]
+    )
+
+
+def test_single_pass_rejects_incomplete_length_finish_after_compression():
+    engine = GenerationEngine.__new__(GenerationEngine)
+    engine.quality_profile = select_quality_profile()
+    calls = []
+
+    class Gateway:
+        provider = "deepseek"
+
+        async def generate(self, prompt, **kwargs):
+            calls.append({"prompt": prompt, **kwargs})
+            first = len(calls) == 1
+            return {
+                "text": ("字" * 3539 + "。") if first else ("字" * 2802 + "，"),
+                "provider": "deepseek",
+                "model": "deepseek-chat",
+                "tokens_input": 10,
+                "tokens_output": 2291 if first else kwargs["max_tokens"],
+                "cost": 0.01,
+                "truncated": True,
+                "finish_reason": "length",
+            }
+
+    engine.ai_gateway = Gateway()
+    engine._build_generation_prompt = lambda *_args, **_kwargs: "整章写作提示"
+
+    with pytest.raises(AIGatewayError, match="terminal_complete=False") as caught:
+        asyncio.run(engine._generate_single_pass_chapter(
+            chapter_number=1,
+            context={"context_layers": {}},
+            scene_plan={"beats": []},
+            outline="第一章兑现开局承诺",
+            target_word_count=2700,
+            chapter_min_chars=2200,
+            chapter_max_chars=3000,
+            chapter_reader_max_chars=3000,
+        ))
+
+    assert len(calls) == 2
+    assert "terminal_reason=non_terminal_punctuation" in str(caught.value)
+
+
 def test_single_pass_second_overlong_candidate_is_a_non_retryable_contract_failure():
     engine = GenerationEngine.__new__(GenerationEngine)
     engine.quality_profile = select_quality_profile()

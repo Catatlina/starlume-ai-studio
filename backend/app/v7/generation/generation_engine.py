@@ -12,6 +12,7 @@ import asyncio
 from difflib import SequenceMatcher
 import json
 import logging
+import math
 import os
 import re
 import time
@@ -94,9 +95,22 @@ logger = logging.getLogger(__name__)
 
 CHAPTER_STATE_TYPE = "chapter"
 SCENE_SERIAL_GENERATION_VERSION = "2.45.0"
-CHAPTER_SINGLE_PASS_GENERATION_VERSION = "2.51.0"
+CHAPTER_SINGLE_PASS_GENERATION_VERSION = "2.52.0"
 CHAPTER_WRITER_PREFERRED_MIN_CHARS = 2350
 CHAPTER_WRITER_PREFERRED_MAX_CHARS = 2550
+# Completion tokens are not Chinese characters.  Production DeepSeek chapter
+# samples average roughly 1.5 visible Chinese characters per completion token;
+# treating a 2550-character target as 2550 tokens repeatedly produced 3500+
+# character drafts.  Keep enough room beyond the preferred range for a natural
+# ending while ensuring that reaching the token ceiling normally remains below
+# the 3000-character reader limit.
+CHAPTER_DEEPSEEK_CHARS_PER_TOKEN = 1.50
+CHAPTER_DEFAULT_CHARS_PER_TOKEN = 1.20
+CHAPTER_TOKEN_SAFE_HEADROOM_CHARS = 200
+CHAPTER_TOKEN_MIN = 1400
+CHAPTER_TOKEN_MAX = 2200
+CHAPTER_OBSERVED_CHARS_PER_TOKEN_MIN = 1.00
+CHAPTER_OBSERVED_CHARS_PER_TOKEN_MAX = 2.00
 # Keep the canonical writer loop intentionally small.  Candidate fan-out and
 # local prose surgery belong to explicit/manual tooling, not the production
 # chapter path; nested retries made the writer see too many competing rules.
@@ -245,6 +259,74 @@ def chinese_word_count(text: str) -> int:
     if not text:
         return 0
     return len(re.sub(r"\s+", "", text))
+
+
+def inspect_chapter_terminal_completeness(text: str) -> dict[str, Any]:
+    """Return deterministic evidence that a token-limited chapter has a real ending.
+
+    ``finish_reason=length`` means only that the Provider used its entire token
+    allowance.  It does not prove that the visible text ends mid-sentence.  A
+    bounded compression pass may therefore be retained when its character
+    budget is valid and its terminal syntax is closed.  This guard is
+    intentionally conservative: ellipses, continuation punctuation, unmatched
+    quotes/brackets and non-terminal words still fail closed.
+    """
+    candidate = str(text or "").strip()
+    if not candidate:
+        return {"passed": False, "reason": "empty"}
+
+    compact = re.sub(r"\s+", "", candidate)
+    if not compact:
+        return {"passed": False, "reason": "empty"}
+
+    pair_checks = (
+        ("“", "”", "double_quote"),
+        ("‘", "’", "single_quote"),
+        ("「", "」", "corner_quote"),
+        ("『", "』", "double_corner_quote"),
+        ("（", "）", "fullwidth_parenthesis"),
+        ("(", ")", "parenthesis"),
+        ("【", "】", "square_title_bracket"),
+        ("[", "]", "square_bracket"),
+        ("《", "》", "book_title_bracket"),
+    )
+    for opener, closer, label in pair_checks:
+        if compact.count(opener) != compact.count(closer):
+            return {"passed": False, "reason": f"unclosed_{label}"}
+    if compact.count('"') % 2:
+        return {"passed": False, "reason": "unclosed_ascii_double_quote"}
+
+    terminal = compact.rstrip("”’」』》】）)]\"")
+    if not terminal:
+        return {"passed": False, "reason": "missing_terminal_sentence"}
+    if terminal.endswith(("……", "...", "…")):
+        return {"passed": False, "reason": "ellipsis_continuation"}
+    if terminal[-1] not in "。！？!?":
+        return {
+            "passed": False,
+            "reason": "non_terminal_punctuation",
+            "terminal": terminal[-1],
+        }
+    return {"passed": True, "reason": "closed_terminal_sentence"}
+
+
+def chapter_completion_token_limit(
+    *,
+    preferred_max_chars: int,
+    hard_max_chars: int,
+    chars_per_token: float,
+) -> int:
+    """Translate a Chinese-character envelope into a bounded completion cap."""
+    ratio = max(
+        CHAPTER_OBSERVED_CHARS_PER_TOKEN_MIN,
+        min(CHAPTER_OBSERVED_CHARS_PER_TOKEN_MAX, float(chars_per_token or 0.0)),
+    )
+    safe_character_ceiling = min(
+        int(hard_max_chars),
+        int(preferred_max_chars) + CHAPTER_TOKEN_SAFE_HEADROOM_CHARS,
+    )
+    estimated_tokens = math.ceil(max(1, safe_character_ceiling) / ratio)
+    return max(CHAPTER_TOKEN_MIN, min(CHAPTER_TOKEN_MAX, estimated_tokens))
 
 
 def chapter_state_key(chapter_number: int) -> str:
@@ -7579,16 +7661,26 @@ class GenerationEngine:
             "分析或工程说明。必须把给定节拍写成连续现场，保证爽点、因果、人物行为和章末落点；"
             f"正文汉字数硬范围为 {minimum_chars}-{hard_max_chars}；"
             f"优先写到 {preferred_min_chars}-{preferred_max_chars} 字，为自然收束留出余量。"
-            "达到优先区间并完成结果后立即结束，不要贴近硬上限。"
+            "达到优先区间并完成结果后立即结束，不要贴近硬上限；"
+            "Provider 输出上限只是安全边界，必须主动在上限前完成结果和章末钩子。"
             "不能通过删掉关键事件、用省略号或解释性总结来满足字数。"
             + early_chapter_contract
             + third_person_generation_contract()
             + content_generation_contract(self.quality_profile)
         )
-        token_limit = min(
-            SCENE_PROVIDER_TOKEN_CAP,
-            max(600, min(2600, int(preferred_max_chars))),
+        provider_name = str(getattr(self.ai_gateway, "provider", "") or "").lower()
+        default_chars_per_token = (
+            CHAPTER_DEEPSEEK_CHARS_PER_TOKEN
+            if provider_name == "deepseek"
+            else CHAPTER_DEFAULT_CHARS_PER_TOKEN
         )
+        token_limit = chapter_completion_token_limit(
+            preferred_max_chars=preferred_max_chars,
+            hard_max_chars=hard_max_chars,
+            chars_per_token=default_chars_per_token,
+        )
+        initial_token_limit = token_limit
+        calibrated_chars_per_token = default_chars_per_token
         retry_feedback = ""
         retry_prompt_override: str | None = None
         retry_system_prompt = writer_system_prompt
@@ -7612,6 +7704,7 @@ class GenerationEngine:
                     else "v7.generation.chapter_single_pass.repair"
                 ),
                 prompt_version=CHAPTER_SINGLE_PASS_GENERATION_VERSION,
+                reject_truncated=False,
                 expand_on_truncation=False,
             )
             add_usage(result)
@@ -7622,7 +7715,26 @@ class GenerationEngine:
             truncated = bool(result.get("truncated")) or str(
                 result.get("finish_reason") or ""
             ).lower() == "length"
-            if not truncated and minimum_chars <= candidate_chars <= hard_max_chars:
+            terminal_completeness = inspect_chapter_terminal_completeness(candidate)
+            within_character_budget = minimum_chars <= candidate_chars <= hard_max_chars
+            accepted_bounded_length_finish = bool(
+                attempt == 1
+                and retry_mode == "compress_recover"
+                and truncated
+                and within_character_budget
+                and terminal_completeness.get("passed")
+            )
+            if accepted_bounded_length_finish:
+                retry_warnings.append({
+                    "code": "chapter_provider_length_finish_structurally_complete",
+                    "severity": "medium",
+                    "message": (
+                        "压缩终稿用满 Provider token 配额，但正文处于章节字数范围内，"
+                        "且句尾、引号和括号闭合；保留正文并继续执行后续质量门禁。"
+                    ),
+                    "evidence": terminal_completeness,
+                })
+            if within_character_budget and (not truncated or accepted_bounded_length_finish):
                 return {
                     "text": candidate,
                     "word_count": candidate_chars,
@@ -7634,6 +7746,16 @@ class GenerationEngine:
                         "attempts": attempt + 1,
                         "generation_warnings": retry_warnings,
                         "generation_path": "chapter_single_pass",
+                        "provider_finish_reason": str(result.get("finish_reason") or "unknown"),
+                        "provider_truncated": truncated,
+                        "terminal_completeness": terminal_completeness,
+                        "completion_budget": {
+                            "initial_max_tokens": initial_token_limit,
+                            "final_max_tokens": token_limit,
+                            "calibrated_chars_per_token": round(
+                                calibrated_chars_per_token, 4
+                            ),
+                        },
                     }],
                     "scene_handoffs": [],
                     "scene_state": {
@@ -7684,15 +7806,20 @@ class GenerationEngine:
                     # chapter.  Keep a small completion margin so the model
                     # can finish the final consequence and hook.
                     observed_chars_per_token = max(
-                        1.0,
-                        min(1.25, candidate_chars / observed_tokens),
+                        CHAPTER_OBSERVED_CHARS_PER_TOKEN_MIN,
+                        min(
+                            CHAPTER_OBSERVED_CHARS_PER_TOKEN_MAX,
+                            candidate_chars / observed_tokens,
+                        ),
                     )
-                    calibrated_tokens = int(
-                        preferred_max_chars / observed_chars_per_token * 0.95
-                    ) + 100
                 else:
-                    calibrated_tokens = int(preferred_max_chars * 0.96)
-                token_limit = max(1900, min(2500, calibrated_tokens))
+                    observed_chars_per_token = default_chars_per_token
+                calibrated_chars_per_token = observed_chars_per_token
+                token_limit = chapter_completion_token_limit(
+                    preferred_max_chars=preferred_max_chars,
+                    hard_max_chars=hard_max_chars,
+                    chars_per_token=observed_chars_per_token,
+                )
                 retry_system_prompt = (
                     "你是中文网文的终稿压缩编辑。只输出压缩后的完整正文，不输出标题、"
                     "分析、提纲或修改说明。上一版正文已经完成故事事件；你的任务是删除冗余，"
@@ -7746,7 +7873,11 @@ class GenerationEngine:
             "single-pass chapter generation contract violation after bounded retry: "
             f"first_candidate={first_candidate_chars},final_candidate={candidate_chars},"
             f"minimum={minimum_chars},maximum={hard_max_chars},"
-            f"retry_mode={retry_mode},provider_truncated={truncated}"
+            f"retry_mode={retry_mode},provider_truncated={truncated},"
+            f"terminal_complete={bool(terminal_completeness.get('passed'))},"
+            f"terminal_reason={terminal_completeness.get('reason')},"
+            f"initial_max_tokens={initial_token_limit},final_max_tokens={token_limit},"
+            f"chars_per_token={calibrated_chars_per_token:.4f}"
         )
 
     @staticmethod

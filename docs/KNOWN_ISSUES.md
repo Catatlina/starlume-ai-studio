@@ -1,5 +1,14 @@
 # Starlume AI 当前已知问题
 
+## 2026-08-25 KI-072 字数合格的压缩终稿因 Provider `length` 高频误失败（本地已修复，待部署）
+
+- 状态：**本地已接线并通过目标回归；尚未提交、推送或部署**。
+- 证据：生产 run `d74db417-83db-4be9-b57c-6c2dde4b006e` 报告 `first_candidate=3540,final_candidate=2803,minimum=2200,maximum=3000,retry_mode=compress_recover,provider_truncated=True`。2803字满足章节合同，但旧逻辑只要 `finish_reason=length` 就拒绝。
+- 根因：压缩调用把实测汉字/token比例截断为最多1.25，并设置1900 token最低值；这会让DeepSeek压缩稿在约2800字附近再次撞上token上限。随后“字数合同”和“截断合同”互相冲突，导致同类流程高频失败。
+- 修复：整章版本2.52.0按Provider/首稿实测比例计算输出token；DeepSeek首轮默认1834 token，压缩轮按真实比例校准。仅第二轮压缩终稿在2200–3000字且句尾、引号和括号完整时允许继续后续质量门禁；残句仍失败。新增完整性warning和诊断字段，不切正文、不放宽章节字数。
+- 本地证据：生产同型离线回放及反例、整章生成、bootstrap可靠性和canonical V7链共 `147 passed`；未调用真实Provider。全量后端仍因本机注册接口503环境阻断，不能标记通过。
+- 未闭合：待commit/push/生产部署和运行时版本核对；由于真实失败终稿已事务回滚，本批不宣称原2803字正文质量合格，也不宣称三章、朱雀或发布闭环通过。
+
 ## 2026-08-25 KI-071 首章质量合同与字数超限触发重复 Provider 调用（已修复部署；单章通过）
 
 - 状态：**生产可用；提交 `2fd64ec` 已推送和部署，真实 Provider 单章 generation scope 已通过**。
