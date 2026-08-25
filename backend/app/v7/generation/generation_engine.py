@@ -95,7 +95,7 @@ logger = logging.getLogger(__name__)
 
 CHAPTER_STATE_TYPE = "chapter"
 SCENE_SERIAL_GENERATION_VERSION = "2.45.0"
-CHAPTER_SINGLE_PASS_GENERATION_VERSION = "2.52.0"
+CHAPTER_SINGLE_PASS_GENERATION_VERSION = "2.53.0"
 CHAPTER_WRITER_PREFERRED_MIN_CHARS = 2350
 CHAPTER_WRITER_PREFERRED_MAX_CHARS = 2550
 # Completion tokens are not Chinese characters.  Production DeepSeek chapter
@@ -111,6 +111,11 @@ CHAPTER_TOKEN_MIN = 1400
 CHAPTER_TOKEN_MAX = 2200
 CHAPTER_OBSERVED_CHARS_PER_TOKEN_MIN = 1.00
 CHAPTER_OBSERVED_CHARS_PER_TOKEN_MAX = 2.00
+CHAPTER_TAIL_REPAIR_TARGET_SOURCE_CHARS = 420
+CHAPTER_TAIL_REPAIR_MIN_SOURCE_CHARS = 220
+CHAPTER_TAIL_REPAIR_MAX_SOURCE_CHARS = 820
+CHAPTER_TAIL_REPAIR_MIN_TOKENS = 180
+CHAPTER_TAIL_REPAIR_MAX_TOKENS = 800
 # Keep the canonical writer loop intentionally small.  Candidate fan-out and
 # local prose surgery belong to explicit/manual tooling, not the production
 # chapter path; nested retries made the writer see too many competing rules.
@@ -327,6 +332,95 @@ def chapter_completion_token_limit(
     )
     estimated_tokens = math.ceil(max(1, safe_character_ceiling) / ratio)
     return max(CHAPTER_TOKEN_MIN, min(CHAPTER_TOKEN_MAX, estimated_tokens))
+
+
+def chapter_tail_repair_boundary(
+    text: str,
+    *,
+    minimum_chars: int,
+    hard_max_chars: int,
+    chars_per_token: float,
+) -> dict[str, Any] | None:
+    """Plan one bounded replacement for an in-range chapter cut off at the tail.
+
+    Rewriting a 2200-3000 character draft that already follows the planned event
+    path is both expensive and unstable.  Keep every complete sentence before a
+    small closing window and ask the Provider to replace only that window.  The
+    returned plan contains no generated prose; it only defines the immutable
+    prefix and the character/token envelope for the second and final call.
+    """
+    candidate = str(text or "").strip()
+    total_chars = chinese_word_count(candidate)
+    minimum_chars = max(1, int(minimum_chars))
+    hard_max_chars = max(minimum_chars, int(hard_max_chars))
+    if not minimum_chars <= total_chars <= hard_max_chars:
+        return None
+
+    target_prefix_chars = total_chars - CHAPTER_TAIL_REPAIR_TARGET_SOURCE_CHARS
+    minimum_prefix_chars = max(800, minimum_chars - 650)
+    maximum_prefix_chars = min(total_chars - 120, hard_max_chars - 320)
+    if maximum_prefix_chars < minimum_prefix_chars:
+        return None
+
+    boundaries: list[tuple[int, int]] = []
+    for match in re.finditer(r"[。！？!?][”’」』》】）)\]]*", candidate):
+        prefix_chars = chinese_word_count(candidate[:match.end()])
+        removed_chars = total_chars - prefix_chars
+        prefix_terminal = inspect_chapter_terminal_completeness(candidate[:match.end()])
+        if (
+            minimum_prefix_chars <= prefix_chars <= maximum_prefix_chars
+            and CHAPTER_TAIL_REPAIR_MIN_SOURCE_CHARS
+            <= removed_chars
+            <= CHAPTER_TAIL_REPAIR_MAX_SOURCE_CHARS
+            and prefix_terminal.get("passed")
+        ):
+            boundaries.append((match.end(), prefix_chars))
+    if not boundaries:
+        return None
+
+    cut_index, prefix_chars = min(
+        boundaries,
+        key=lambda item: abs(item[1] - target_prefix_chars),
+    )
+    prefix = candidate[:cut_index].rstrip()
+    replaced_source = candidate[cut_index:].strip()
+    available_tail_chars = hard_max_chars - prefix_chars
+    required_tail_chars = max(1, minimum_chars - prefix_chars)
+    preferred_tail_min = min(
+        available_tail_chars,
+        max(required_tail_chars, 320),
+    )
+    preferred_tail_max = min(
+        available_tail_chars,
+        max(preferred_tail_min, 560),
+    )
+    if preferred_tail_min > preferred_tail_max or available_tail_chars < required_tail_chars:
+        return None
+
+    ratio = max(
+        CHAPTER_OBSERVED_CHARS_PER_TOKEN_MIN,
+        min(CHAPTER_OBSERVED_CHARS_PER_TOKEN_MAX, float(chars_per_token or 0.0)),
+    )
+    safe_tail_ceiling = min(
+        available_tail_chars,
+        preferred_tail_max + 100,
+    )
+    token_limit = math.ceil(max(1, safe_tail_ceiling) / ratio)
+    token_limit = max(
+        CHAPTER_TAIL_REPAIR_MIN_TOKENS,
+        min(CHAPTER_TAIL_REPAIR_MAX_TOKENS, token_limit),
+    )
+    return {
+        "prefix": prefix,
+        "prefix_chars": prefix_chars,
+        "replaced_source": replaced_source,
+        "replaced_source_chars": chinese_word_count(replaced_source),
+        "available_tail_chars": available_tail_chars,
+        "required_tail_chars": required_tail_chars,
+        "preferred_tail_min": preferred_tail_min,
+        "preferred_tail_max": preferred_tail_max,
+        "token_limit": token_limit,
+    }
 
 
 def chapter_state_key(chapter_number: int) -> str:
@@ -7612,7 +7706,9 @@ class GenerationEngine:
         They let an early scene consume the future chapter remainder and then
         leave the final scene with an impossible completion envelope.  The
         writer therefore receives the complete beat plan and owns the single
-        chapter budget; only one bounded full-chapter retry is allowed.
+        chapter budget; only one bounded repair call is allowed.  An in-range
+        draft cut off at the tail keeps its complete prefix and replaces only
+        a small ending window instead of resampling the whole chapter.
         """
         minimum_chars = max(1, int(chapter_min_chars))
         hard_max_chars = max(
@@ -7687,6 +7783,7 @@ class GenerationEngine:
         retry_warnings: list[dict[str, Any]] = []
         first_candidate_chars = 0
         retry_mode = "none"
+        tail_repair_plan: dict[str, Any] | None = None
 
         for attempt in range(2):
             prompt = retry_prompt_override or (base_prompt + retry_feedback)
@@ -7709,6 +7806,12 @@ class GenerationEngine:
             )
             add_usage(result)
             candidate = str(result.get("text") or "").strip()
+            if attempt == 1 and retry_mode == "tail_repair" and tail_repair_plan:
+                candidate = (
+                    str(tail_repair_plan["prefix"]).rstrip()
+                    + "\n\n"
+                    + candidate.lstrip()
+                ).strip()
             candidate_chars = chinese_word_count(candidate)
             if attempt == 0:
                 first_candidate_chars = candidate_chars
@@ -7719,7 +7822,7 @@ class GenerationEngine:
             within_character_budget = minimum_chars <= candidate_chars <= hard_max_chars
             accepted_bounded_length_finish = bool(
                 attempt == 1
-                and retry_mode == "compress_recover"
+                and retry_mode in {"compress_recover", "tail_repair"}
                 and truncated
                 and within_character_budget
                 and terminal_completeness.get("passed")
@@ -7729,7 +7832,7 @@ class GenerationEngine:
                     "code": "chapter_provider_length_finish_structurally_complete",
                     "severity": "medium",
                     "message": (
-                        "压缩终稿用满 Provider token 配额，但正文处于章节字数范围内，"
+                        "修复终稿用满 Provider token 配额，但正文处于章节字数范围内，"
                         "且句尾、引号和括号闭合；保留正文并继续执行后续质量门禁。"
                     ),
                     "evidence": terminal_completeness,
@@ -7745,7 +7848,11 @@ class GenerationEngine:
                         "word_count": candidate_chars,
                         "attempts": attempt + 1,
                         "generation_warnings": retry_warnings,
-                        "generation_path": "chapter_single_pass",
+                        "generation_path": (
+                            "chapter_single_pass_tail_repair"
+                            if retry_mode == "tail_repair"
+                            else "chapter_single_pass"
+                        ),
                         "provider_finish_reason": str(result.get("finish_reason") or "unknown"),
                         "provider_truncated": truncated,
                         "terminal_completeness": terminal_completeness,
@@ -7784,6 +7891,77 @@ class GenerationEngine:
                     f"provider_truncated={truncated}"
                 ),
             })
+            if attempt == 1:
+                break
+
+            observed_tokens = int(result.get("tokens_output") or 0)
+            if observed_tokens > 0 and candidate_chars > 0:
+                observed_chars_per_token = max(
+                    CHAPTER_OBSERVED_CHARS_PER_TOKEN_MIN,
+                    min(
+                        CHAPTER_OBSERVED_CHARS_PER_TOKEN_MAX,
+                        candidate_chars / observed_tokens,
+                    ),
+                )
+            else:
+                observed_chars_per_token = default_chars_per_token
+
+            if truncated and within_character_budget:
+                tail_repair_plan = chapter_tail_repair_boundary(
+                    candidate,
+                    minimum_chars=minimum_chars,
+                    hard_max_chars=hard_max_chars,
+                    chars_per_token=observed_chars_per_token,
+                )
+                if tail_repair_plan:
+                    retry_mode = "tail_repair"
+                    calibrated_chars_per_token = observed_chars_per_token
+                    token_limit = int(tail_repair_plan["token_limit"])
+                    retry_system_prompt = (
+                        "你是中文网文的结尾接写编辑。只输出替换后的章节尾段，不输出标题、"
+                        "分析、提纲、字数统计或修改说明。前文已经锁定，禁止重写前文、重复开场、"
+                        "另起支线或改变既定因果。尾段必须从当前动作自然接续，完成本章结果与钩子，"
+                        "并以完整句子结束。"
+                    )
+                    beats = scene_plan.get("beats") or []
+                    remaining_beats = "、".join(
+                        str(beat.get("name") or "").strip()
+                        for beat in beats[-2:]
+                        if isinstance(beat, dict) and str(beat.get("name") or "").strip()
+                    )
+                    payoff = scene_plan.get("payoff_contract") or {}
+                    retry_prompt_override = (
+                        "【任务】只重写本章最后一小段。锁定前文一字不改；你只返回接在锁定前文"
+                        "之后的新尾段，不要复述锁定前文的最后一句。\n"
+                        f"【尾段字数】优先 {tail_repair_plan['preferred_tail_min']}-"
+                        f"{tail_repair_plan['preferred_tail_max']} 个可见汉字；硬上限 "
+                        f"{tail_repair_plan['available_tail_chars']} 字。完成结果和钩子后立即停止。\n"
+                        f"【剩余节拍】{remaining_beats or '完成当前动作的结果与余波'}\n"
+                        f"【章末钩子】{scene_plan.get('hook') or '留下由本章结果自然引出的下一压力'}\n"
+                        f"【可见反馈】{payoff.get('payoff_feedback') or '让本章行动产生可见变化'}\n"
+                        f"【下一压力】{payoff.get('next_pressure') or scene_plan.get('hook') or '由本章结果自然引出'}\n\n"
+                        "【锁定前文末尾（仅供承接，不得重写或复述）】\n"
+                        f"{str(tail_repair_plan['prefix'])[-1200:]}\n"
+                        "【锁定前文结束】\n\n"
+                        "【被截断的旧尾部（仅用于识别未完动作，不得照抄残句）】\n"
+                        f"{str(tail_repair_plan['replaced_source'])[-900:]}\n"
+                        "【旧尾部结束】"
+                    )
+                    retry_warnings.append({
+                        "code": "chapter_tail_repair",
+                        "severity": "low",
+                        "message": (
+                            "首稿字数已合格但尾部被 Provider 截断；锁定完整前文，"
+                            "第二次调用只替换结尾窗口。"
+                        ),
+                        "evidence": {
+                            "prefix_chars": tail_repair_plan["prefix_chars"],
+                            "replaced_source_chars": tail_repair_plan["replaced_source_chars"],
+                            "available_tail_chars": tail_repair_plan["available_tail_chars"],
+                        },
+                    })
+                    continue
+
             if candidate_chars > hard_max_chars or (
                 truncated and candidate_chars >= max(800, int(minimum_chars * 0.60))
             ):
@@ -7797,23 +7975,10 @@ class GenerationEngine:
                 # is still safer to compress/recover its existing event path
                 # than to grant another larger full-chapter budget.
                 retry_mode = "compress_recover" if truncated else "compress"
-                observed_tokens = int(result.get("tokens_output") or 0)
-                if observed_tokens > 0 and candidate_chars > 0:
-                    # DeepSeek's completion-token count is not a Chinese
-                    # character count.  Calibrate the compact pass from the
-                    # actual response rather than applying a fixed token
-                    # percentage that can still produce another 3500-char
-                    # chapter.  Keep a small completion margin so the model
-                    # can finish the final consequence and hook.
-                    observed_chars_per_token = max(
-                        CHAPTER_OBSERVED_CHARS_PER_TOKEN_MIN,
-                        min(
-                            CHAPTER_OBSERVED_CHARS_PER_TOKEN_MAX,
-                            candidate_chars / observed_tokens,
-                        ),
-                    )
-                else:
-                    observed_chars_per_token = default_chars_per_token
+                # DeepSeek's completion-token count is not a Chinese character
+                # count.  Calibrate the compact pass from the actual response
+                # rather than applying a fixed token percentage that can still
+                # produce another 3500-character chapter.
                 calibrated_chars_per_token = observed_chars_per_token
                 token_limit = chapter_completion_token_limit(
                     preferred_max_chars=preferred_max_chars,

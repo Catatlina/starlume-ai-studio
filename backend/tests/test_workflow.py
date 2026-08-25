@@ -94,7 +94,7 @@ def test_node_retry_requires_auth(client):
     assert r.status_code in [401, 404]
 
 
-def test_retry_after_generation_fix_only_matches_pre_252_false_truncation():
+def test_retry_after_generation_fix_only_matches_versioned_false_truncation_defects():
     from app.main import _retry_after_generation_fix
 
     old_false_rejection = {
@@ -109,15 +109,38 @@ def test_retry_after_generation_fix_only_matches_pre_252_false_truncation():
     recovery = _retry_after_generation_fix("write_chapter_draft", "failed", old_false_rejection)
 
     assert recovery is not None
-    assert recovery["to_version"] == "2.52.0"
+    assert recovery["to_version"] == "2.53.0"
     assert recovery["final_chars"] == 2803
 
-    current_failure = {
+    unrelated_252_failure = {
         **old_false_rejection,
         "generation_version": "2.52.0",
         "error": old_false_rejection["error"] + ",terminal_complete=False,terminal_reason=unfinished_sentence",
     }
-    assert _retry_after_generation_fix("write_chapter_draft", "failed", current_failure) is None
+    assert _retry_after_generation_fix("write_chapter_draft", "failed", unrelated_252_failure) is None
+
+    in_range_tail_regression = {
+        "retryable": False,
+        "failure_kind": "generation_contract",
+        "generation_version": "2.52.0",
+        "error": (
+            "single-pass chapter generation contract violation after bounded retry: "
+            "first_candidate=2524,final_candidate=2749,minimum=2200,maximum=3000,"
+            "retry_mode=compress_recover,provider_truncated=True,terminal_complete=False,"
+            "terminal_reason=non_terminal_punctuation,initial_max_tokens=1834,"
+            "final_max_tokens=2000,chars_per_token=1.3752"
+        ),
+    }
+    tail_recovery = _retry_after_generation_fix(
+        "write_chapter_draft", "failed", in_range_tail_regression
+    )
+    assert tail_recovery is not None
+    assert tail_recovery["from_version"] == "2.52.0"
+    assert tail_recovery["to_version"] == "2.53.0"
+    assert tail_recovery["first_chars"] == 2524
+
+    current_253_failure = {**in_range_tail_regression, "generation_version": "2.53.0"}
+    assert _retry_after_generation_fix("write_chapter_draft", "failed", current_253_failure) is None
 
     genuinely_overlong = {
         **old_false_rejection,
@@ -248,7 +271,7 @@ def test_retry_after_fix_reuses_run_and_records_audit(monkeypatch):
     run_update = next(params for sql, params in connection.statements if sql.startswith("UPDATE workflow_runs"))
     saved_context = json.loads(run_update[1])
     assert saved_context["preserved"] is True
-    assert saved_context["code_fix_retries"][-1]["to_version"] == "2.52.0"
+    assert saved_context["code_fix_retries"][-1]["to_version"] == "2.53.0"
     assert dispatched == [(run_id, "write_chapter_draft", "", "https://provider.test/v1", "writer-model")]
 
 

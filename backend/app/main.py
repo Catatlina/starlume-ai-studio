@@ -1538,45 +1538,78 @@ async def generate_video_script(
 
 
 def _retry_after_generation_fix(node_key: str, status: str, output: Any) -> dict[str, Any] | None:
-    """Expose a one-time recovery path for the pre-2.52 false truncation rejection.
+    """Expose one-time recovery only for chapter defects fixed by this runtime.
 
-    Version 2.51 rejected a compressed chapter whenever the provider response
-    reached its token ceiling, even when the recovered prose was inside the
-    requested character range and ended naturally.  Version 2.52 records
-    ``terminal_complete=...`` and accepts that exact safe case.  Keep this
-    recognizer deliberately narrow so unrelated deterministic contract or
-    quality failures cannot be force-retried.
+    The recognizers are deliberately versioned and evidence-based.  Unrelated
+    deterministic contract or quality failures must not gain a force-retry
+    path merely because they happened in the same workflow node.
     """
     if node_key != "write_chapter_draft" or status != "failed" or not isinstance(output, dict):
         return None
     if output.get("retryable") is not False or output.get("failure_kind") != "generation_contract":
         return None
     error = str(output.get("error") or "")
-    if "terminal_complete=" in error:
-        return None
-    match = _re.search(
-        r"final_candidate=(\d+),minimum=(\d+),maximum=(\d+),"
-        r"retry_mode=compress_recover,provider_truncated=True(?:,|$)",
-        error,
-    )
-    if not match:
-        return None
-    final_chars, minimum_chars, maximum_chars = (int(value) for value in match.groups())
-    if not minimum_chars <= final_chars <= maximum_chars:
-        return None
     from .v7.generation.generation_engine import CHAPTER_SINGLE_PASS_GENERATION_VERSION
 
-    if CHAPTER_SINGLE_PASS_GENERATION_VERSION != "2.52.0":
+    if CHAPTER_SINGLE_PASS_GENERATION_VERSION != "2.53.0":
         return None
-    return {
-        "available": bool(match and minimum_chars <= final_chars <= maximum_chars),
-        "from_version": "pre-2.52.0",
-        "to_version": CHAPTER_SINGLE_PASS_GENERATION_VERSION,
-        "reason": "旧版将字数合格且已收束的截断恢复稿误判为失败；2.52 已加入终止完整性判断。",
-        "final_chars": final_chars,
-        "minimum_chars": minimum_chars,
-        "maximum_chars": maximum_chars,
-    }
+
+    if "terminal_complete=" not in error:
+        legacy_match = _re.search(
+            r"final_candidate=(\d+),minimum=(\d+),maximum=(\d+),"
+            r"retry_mode=compress_recover,provider_truncated=True(?:,|$)",
+            error,
+        )
+        if legacy_match:
+            final_chars, minimum_chars, maximum_chars = (
+                int(value) for value in legacy_match.groups()
+            )
+            if minimum_chars <= final_chars <= maximum_chars:
+                return {
+                    "available": bool(
+                        legacy_match and minimum_chars <= final_chars <= maximum_chars
+                    ),
+                    "from_version": "pre-2.52.0",
+                    "to_version": CHAPTER_SINGLE_PASS_GENERATION_VERSION,
+                    "reason": (
+                        "旧版将字数合格且已收束的截断恢复稿误判为失败；"
+                        "当前版本已加入终止完整性判断。"
+                    ),
+                    "final_chars": final_chars,
+                    "minimum_chars": minimum_chars,
+                    "maximum_chars": maximum_chars,
+                }
+
+    tail_repair_match = _re.search(
+        r"first_candidate=(\d+),final_candidate=(\d+),minimum=(\d+),maximum=(\d+),"
+        r"retry_mode=compress_recover,provider_truncated=True,terminal_complete=False,"
+        r"terminal_reason=non_terminal_punctuation(?:,|$)",
+        error,
+    )
+    generation_version = str(output.get("generation_version") or "")
+    if tail_repair_match and generation_version == "2.52.0":
+        first_chars, final_chars, minimum_chars, maximum_chars = (
+            int(value) for value in tail_repair_match.groups()
+        )
+        if minimum_chars <= first_chars <= maximum_chars:
+            return {
+                "available": bool(
+                    tail_repair_match
+                    and generation_version == "2.52.0"
+                    and minimum_chars <= first_chars <= maximum_chars
+                ),
+                "from_version": generation_version,
+                "to_version": CHAPTER_SINGLE_PASS_GENERATION_VERSION,
+                "reason": (
+                    "2.52 将字数合格但尾部截断的首稿交给整章压缩，导致第二稿再次截断；"
+                    "2.53 改为锁定前文并只替换结尾窗口。"
+                ),
+                "first_chars": first_chars,
+                "final_chars": final_chars,
+                "minimum_chars": minimum_chars,
+                "maximum_chars": maximum_chars,
+            }
+    return None
 
 
 def _hydrate_run(conn, run: dict) -> dict:
